@@ -15,6 +15,9 @@ name: release
 # does not re-trigger this workflow) before building the same release. Always
 # on a GitHub-hosted runner. Nothing here updates an installed copy; users
 # upgrade through their own plugin manager.
+#
+# After the Release, the `npm` job mirrors the same tag to npm through
+# publish-npm.yml (trusted publishing, with provenance).
 on:
   push:
     tags: ["v[0-9]*"]
@@ -111,3 +114,18 @@ jobs:
             --title "$TAG" \
             --notes-file "$RUNNER_TEMP/release-notes.md" \
             --verify-tag --latest
+
+  npm:
+    # Mirror the released tag to npm (publish-npm.yml), only after the GitHub
+    # Release above succeeded. This is publish-npm.yml's only entry point: it
+    # has no tag trigger of its own (a tag this workflow creates on dispatch,
+    # with the job token, would never start one anyway). npm trusted publishing
+    # checks THIS file's name for a called workflow, so `release.yml` is the
+    # package's trusted publisher.
+    needs: release
+    uses: ./.github/workflows/publish-npm.yml
+    with:
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    permissions:
+      contents: read
+      id-token: write
