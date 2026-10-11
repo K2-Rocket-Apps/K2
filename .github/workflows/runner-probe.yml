@@ -1,0 +1,15 @@
+name: runner-probe
+
+# Proves GitHub-hosted runners are available to this public repository.
+# Manual trigger only; never runs on pull requests or forks.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo "GitHub-hosted runner OK"
