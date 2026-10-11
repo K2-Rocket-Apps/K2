@@ -243,9 +243,27 @@ def test_every_job_uses_a_github_hosted_runner(name):
         assert job["runs-on"] == "ubuntu-latest", f"{name}:{job_name}"
 
 
-def test_release_triggers_on_v_tags_only():
+def test_release_triggers_on_v_tags_or_a_tag_dispatch_only():
     wf = _workflow("release.yml")
-    assert wf["on"] == {"push": {"tags": ["v[0-9]*"]}}
+    assert set(wf["on"]) == {"push", "workflow_dispatch"}
+    assert wf["on"]["push"] == {"tags": ["v[0-9]*"]}
+    tag_input = wf["on"]["workflow_dispatch"]["inputs"]["tag"]
+    assert tag_input["required"] is True and tag_input["type"] == "string"
+
+
+def test_release_tag_comes_from_the_dispatch_input_or_the_pushed_ref():
+    (job,) = _workflow("release.yml")["jobs"].values()
+    assert job["env"]["TAG"] == "${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+
+
+def test_dispatch_creates_the_tag_only_after_the_version_gate():
+    (job,) = _workflow("release.yml")["jobs"].values()
+    steps = job["steps"]
+    gate = _step_index(steps, lambda s: 'tests/version_consistency.py --tag "$TAG"' in s.get("run", ""), "version gate")
+    create = _step_index(steps, lambda s: 'tag -a "$TAG"' in s.get("run", ""), "tag creation")
+    assert gate < create
+    assert steps[create]["if"] == "github.event_name == 'workflow_dispatch'"
+    assert "already exists" in steps[create]["run"]
 
 
 def test_release_permissions_are_scoped_to_the_job():
@@ -270,7 +288,7 @@ def test_release_steps_run_in_order():
 
     order = [
         _step_index(steps, uses("actions/checkout@"), "checkout"),
-        _step_index(steps, run('tests/version_consistency.py --tag "$GITHUB_REF_NAME"'), "version gate"),
+        _step_index(steps, run('tests/version_consistency.py --tag "$TAG"'), "version gate"),
         _step_index(steps, run("git merge-base --is-ancestor"), "main ancestry check"),
         _step_index(steps, run("pytest tests/"), "pytest"),
         _step_index(steps, run("git archive --format=tar.gz"), "git archive"),
@@ -281,17 +299,17 @@ def test_release_steps_run_in_order():
     assert order == sorted(order), order
 
     archive = steps[order[4]]["run"]
-    assert '--prefix="k2-${GITHUB_REF_NAME}/"' in archive
-    assert '-o "k2-${GITHUB_REF_NAME}.tar.gz" "refs/tags/${GITHUB_REF_NAME}"' in archive
+    assert '--prefix="k2-${TAG}/"' in archive
+    assert '-o "k2-${TAG}.tar.gz" "refs/tags/${TAG}"' in archive
 
     subjects = steps[order[6]]["with"]["subject-path"]
-    assert "k2-${{ github.ref_name }}.tar.gz" in subjects and "SHA256SUMS" in subjects
+    assert "k2-${{ env.TAG }}.tar.gz" in subjects and "SHA256SUMS" in subjects
 
     publish = steps[order[7]]["run"]
-    for flag in ("--verify-tag", "--latest", "--notes-file", "SHA256SUMS", 'k2-${GITHUB_REF_NAME}.tar.gz'):
+    for flag in ("--verify-tag", "--latest", "--notes-file", "SHA256SUMS", 'k2-${TAG}.tar.gz'):
         assert flag in publish
     # The version gate is the first thing that can fail: nothing runs before it
-    # except checkout and the interpreter setup.
+    # except checkout and the interpreter setup (dispatch creates no tag before it).
     assert all("run" not in s for s in steps[: order[1]])
 
 
