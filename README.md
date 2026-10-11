@@ -6,7 +6,87 @@ This repository is public and can be cloned anonymously. It contains no secrets,
 
 ## Install
 
-Install instructions will be published here with the first tagged release.
+Every command below uses only the public repository URL; none of them needs a token or a secret.
+The package installs **no MCP server, no hooks and no background jobs**, and **changes no git
+settings**. It ships skills only.
+
+### Claude Code
+
+```sh
+claude plugin marketplace add K2-Rocket-Apps/k2
+claude plugin install k2@k2 --scope user
+```
+
+To pin a specific release instead of following the default branch, add the marketplace at a tag:
+
+```sh
+claude plugin marketplace add K2-Rocket-Apps/k2#v0.3.0
+claude plugin install k2@k2 --scope user
+```
+
+Optional: turn on `autoUpdate` for the `k2` marketplace so Claude Code picks up new releases when it
+starts, by setting it in your user settings file (`~/.claude/settings.json`):
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "k2": {
+      "source": { "source": "github", "repo": "K2-Rocket-Apps/k2" },
+      "autoUpdate": true
+    }
+  }
+}
+```
+
+`autoUpdate` only manages user-scope installs, which is why the install above uses `--scope user`.
+Leave it off if you pinned a tag.
+
+### Codex
+
+```sh
+codex plugin marketplace add K2-Rocket-Apps/k2
+codex plugin add k2@k2
+```
+
+To pin a release, add the marketplace with `--ref`:
+
+```sh
+codex plugin marketplace add K2-Rocket-Apps/k2 --ref v0.3.0
+codex plugin add k2@k2
+```
+
+To upgrade later:
+
+```sh
+codex plugin marketplace upgrade k2
+```
+
+### Claude Code on the web
+
+Add this line as the **last** line of your environment's setup script (its trailing `exit 0` ends the
+script). A failed install is reported but never blocks the session from starting:
+
+```sh
+claude plugin marketplace add K2-Rocket-Apps/k2 && claude plugin install k2@k2 --scope user || echo "k2 plugin install failed (see above)" >&2; exit 0
+```
+
+### Verify a release
+
+Each GitHub Release carries `k2-vX.Y.Z.tar.gz` (the tagged source) and `SHA256SUMS`, both with a
+GitHub artifact attestation. After downloading them from the release page:
+
+```sh
+gh attestation verify k2-vX.Y.Z.tar.gz --repo K2-Rocket-Apps/k2
+sha256sum -c SHA256SUMS
+```
+
+### Next step: connect
+
+Installing the plugin connects nothing on its own. Ask your agent to run the **k2-connect** skill
+(for example, "Connect me to my K2 gateway."). It sets up your gateway URL through `k2-agent`, and
+sign-in happens in your browser.
+
+Release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Security
 
