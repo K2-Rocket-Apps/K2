@@ -1,0 +1,12 @@
+{
+  "name": "k2",
+  "version": "0.1.0",
+  "description": "Connect your coding agent to your organization's K2 MCP Gateway and Memory.",
+  "author": {
+    "name": "K2-Rocket-Apps",
+    "url": "https://github.com/K2-Rocket-Apps"
+  },
+  "homepage": "https://github.com/K2-Rocket-Apps/k2",
+  "repository": "https://github.com/K2-Rocket-Apps/k2",
+  "license": "Apache-2.0"
+}

@@ -1,0 +1,15 @@
+dev-tools-claude-marketplace
+shared-tools:
+plugins/memory-hooks
+CrazyMan28
+karsten
+crazyman
+run-waves.sh
+memory-build-items
+cross_repo_archaeology_guard
+laravel-standards
+helm-standards
+php artisan tinker
+localhost:5432
+k2-arc-linux
+dangerously-skip-permissions
