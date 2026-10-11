@@ -20,6 +20,9 @@
 #      tests/test_curated_skills.py, read from the source the CLI just cloned),
 #      and `k2-memory-hooks` was not installed.
 #   4. Neither installer wrote a user-level git config file.
+#   5. When the source is pinned to a release tag (`#vX.Y.Z`), both the Claude
+#      plugin list and the Codex cache report plugin version X.Y.Z, so a CLI
+#      that silently ignored the ref would fail here.
 #
 # Isolation: HOME, CLAUDE_CONFIG_DIR and CODEX_HOME all point at fresh
 # temporary directories, and git's user-level config is redirected into that
@@ -45,6 +48,16 @@ if [ "$#" -ne 1 ] || [ -z "$1" ]; then
   exit 2
 fi
 SOURCE="$1"
+
+# A source pinned to a release tag (`...#vX.Y.Z`) must install version X.Y.Z.
+EXPECTED_VERSION=""
+case "$SOURCE" in
+  *'#'*)
+    if [[ "${SOURCE#*#}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+      EXPECTED_VERSION="${BASH_REMATCH[1]}"
+    fi
+    ;;
+esac
 
 # --- Clean-machine environment -------------------------------------------
 SMOKE_HOME="$(mktemp -d)"
@@ -123,6 +136,17 @@ CLAUDE_LIST_JSON="$CLAUDE_LIST_JSON" node -e '
 ' || fail "claude plugin list does not show exactly k2@k2 enabled without k2-memory-hooks"
 say "claude: k2@k2 listed and enabled: OK"
 
+if [ -n "$EXPECTED_VERSION" ]; then
+  CLAUDE_LIST_JSON="$CLAUDE_LIST_JSON" EXPECTED_VERSION="$EXPECTED_VERSION" node -e '
+    const k2 = JSON.parse(process.env.CLAUDE_LIST_JSON).find((p) => p.id === "k2@k2");
+    if (k2.version !== process.env.EXPECTED_VERSION) {
+      console.error("k2@k2 version is " + JSON.stringify(k2.version) + ", expected " + process.env.EXPECTED_VERSION);
+      process.exit(1);
+    }
+  ' || fail "claude installed the wrong k2 version for $SOURCE"
+  say "claude: k2@k2 version $EXPECTED_VERSION matches the pinned tag: OK"
+fi
+
 node -e '
   const fs = require("fs");
   const path = process.env.CLAUDE_CONFIG_DIR + "/settings.json";
@@ -157,6 +181,12 @@ shopt -s nullglob
 versions=("$CODEX_CACHE/k2/"*/)
 shopt -u nullglob
 [ "${#versions[@]}" -eq 1 ] || fail "expected one cached k2 version under $CODEX_CACHE/k2, found ${#versions[@]}"
+if [ -n "$EXPECTED_VERSION" ]; then
+  CACHED_VERSION="$(basename "${versions[0]%/}")"
+  [ "$CACHED_VERSION" = "$EXPECTED_VERSION" ] \
+    || fail "codex cached k2 version $CACHED_VERSION, expected $EXPECTED_VERSION for $SOURCE"
+  say "codex: cached k2 version $EXPECTED_VERSION matches the pinned tag: OK"
+fi
 SKILLS_DIR="${versions[0]%/}/skills"
 [ -d "$SKILLS_DIR" ] || fail "no skills directory at $SKILLS_DIR"
 

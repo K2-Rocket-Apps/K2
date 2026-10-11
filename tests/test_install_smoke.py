@@ -94,6 +94,14 @@ def test_script_checks_the_install_outcomes():
     assert not re.search(r"plugin (install|add) k2-memory-hooks", text), "the script must never install k2-memory-hooks"
 
 
+def test_script_checks_the_pinned_version_on_both_clis():
+    text = _script()
+    assert "EXPECTED_VERSION" in text
+    assert re.search(r"\^v\(\[0-9\]\+", text), "a #vX.Y.Z source must derive the expected version"
+    assert "k2.version !== process.env.EXPECTED_VERSION" in text
+    assert '[ "$CACHED_VERSION" = "$EXPECTED_VERSION" ]' in text
+
+
 @pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
 def test_script_fails_when_gh_is_on_path(tmp_path):
     fake_bin = tmp_path / "bin"
@@ -164,7 +172,7 @@ def test_workflow_pins_the_same_cli_versions_as_validate():
         assert smoke[key] == validate[key], key
 
 
-def test_workflow_runs_unpinned_then_pinned_to_the_latest_tag():
+def test_workflow_runs_unpinned_then_pinned_to_a_release_tag():
     (job,) = _workflow(SMOKE_WORKFLOW)["jobs"].values()
     runs = [step.get("run", "") for step in job["steps"]]
     smoke_runs = [r for r in runs if "scripts/install-smoke.sh" in r]
@@ -172,9 +180,21 @@ def test_workflow_runs_unpinned_then_pinned_to_the_latest_tag():
         'bash "$SMOKE_SRC/scripts/install-smoke.sh" "$SMOKE_REPO"',
         'bash "$SMOKE_SRC/scripts/install-smoke.sh" "$SMOKE_REPO#$SMOKE_TAG"',
     ]
-    resolve = next(r for r in runs if "SMOKE_TAG=" in r)
+    resolve_step = next(step for step in job["steps"] if "SMOKE_TAG=" in step.get("run", ""))
+    resolve = resolve_step["run"]
     assert "git ls-remote --tags" in resolve
     assert runs.index(resolve) < runs.index(smoke_runs[1])
+    # A release event pins the tag it published, passed through env (never
+    # interpolated into the script body).
+    assert resolve_step["env"]["RELEASE_TAG"] == "${{ github.event.release.tag_name }}"
+    assert "${{" not in resolve
+    assert '"$RELEASE_TAG"' in resolve
+
+
+def test_workflow_never_interpolates_expressions_into_run_scripts():
+    (job,) = _workflow(SMOKE_WORKFLOW)["jobs"].values()
+    for step in job["steps"]:
+        assert "${{" not in step.get("run", ""), step.get("name")
 
 
 def test_workflow_never_installs_or_calls_gh():
