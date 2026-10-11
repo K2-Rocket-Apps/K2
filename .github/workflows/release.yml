@@ -17,7 +17,10 @@ name: release
 # upgrade through their own plugin manager.
 #
 # After the Release, the `npm` job mirrors the same tag to npm through
-# publish-npm.yml (trusted publishing, with provenance).
+# publish-npm.yml (trusted publishing, with provenance), and the
+# `mcp-registry` job publishes server.json for the same tag to the official
+# MCP Registry through publish-mcp-registry.yml (behind the `mcp-registry`
+# environment's required reviewer).
 on:
   push:
     tags: ["v[0-9]*"]
@@ -129,3 +132,23 @@ jobs:
     permissions:
       contents: read
       id-token: write
+
+  mcp-registry:
+    # Publish server.json for the released tag to the official MCP Registry
+    # (publish-mcp-registry.yml), only after the GitHub Release succeeded. This
+    # is that workflow's only publish entry point: a tag this workflow creates
+    # on dispatch, with the job token, would never start a tag trigger of its
+    # own. The publish job runs in the `mcp-registry` environment, whose
+    # required reviewer must approve it, so a tag alone never publishes.
+    needs: release
+    uses: ./.github/workflows/publish-mcp-registry.yml
+    with:
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    permissions:
+      contents: read
+    # Only this one secret, by name (never `inherit`). It is stored as an
+    # environment secret of `mcp-registry`; a reusable workflow still needs
+    # the caller to pass it by name, and the environment's value takes
+    # precedence once the called job enters that environment.
+    secrets:
+      MCP_REGISTRY_PRIVATE_KEY: ${{ secrets.MCP_REGISTRY_PRIVATE_KEY }}

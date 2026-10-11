@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.k2-tek/gateway",
+  "title": "MCP Gateway by K2",
+  "description": "One OAuth sign-in to every MCP server your organization has approved, with audit and policy.",
+  "websiteUrl": "https://gateway.k2-tek.com/docs",
+  "repository": {
+    "url": "https://github.com/K2-Rocket-Apps/k2",
+    "source": "github"
+  },
+  "version": "0.4.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://{org_slug}.gateway.k2-tek.com/mcp",
+      "variables": {
+        "org_slug": {
+          "description": "Your organization's gateway subdomain",
+          "isRequired": true
+        }
+      }
+    }
+  ]
+}
