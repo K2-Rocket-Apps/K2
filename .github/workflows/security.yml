@@ -1,0 +1,15 @@
+name: security
+
+on:
+  push:
+    branches: [develop, qa, main]
+  pull_request:
+    branches: [develop, qa, main]
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    uses: K2-Rocket-Apps/ci-workflows/.github/workflows/security.yml@v1
+    secrets: inherit
