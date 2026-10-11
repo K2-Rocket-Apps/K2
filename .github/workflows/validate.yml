@@ -87,6 +87,14 @@ jobs:
           codex plugin marketplace add "$GITHUB_WORKSPACE"
           codex plugin add k2@k2
 
+      - name: Installed plugin carries the curated skills
+        run: |
+          version="$(python3 -c 'import json; print(json.load(open("plugins/k2/.claude-plugin/plugin.json"))["version"])')"
+          skills="$CODEX_HOME/plugins/cache/k2/k2/$version/skills"
+          for skill in mcp-step-up-approval cross-repo-code-lookup memory-orchestrate; do
+            test -f "$skills/$skill/SKILL.md" || { echo "missing $skills/$skill/SKILL.md"; exit 1; }
+          done
+
       - name: Installed plugin contributes no MCP server
         run: |
           servers="$(codex mcp list --json)"

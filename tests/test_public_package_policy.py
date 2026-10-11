@@ -617,6 +617,8 @@ def test_check_no_symlinks_rejects_symlinked_skills_dir(tmp_path):
     hidden = root / "tests" / "hidden"
     hidden.mkdir()
     (hidden / "SKILL.md").write_text("hidden skill\n")
+    # Replace the real skills directory (present once skills ship) with the link.
+    shutil.rmtree(root / "plugins" / "k2" / "skills", ignore_errors=True)
     (root / "plugins" / "k2" / "skills").symlink_to(Path("..") / ".." / "tests" / "hidden")
     assert check_no_symlinks(root)
 
