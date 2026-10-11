@@ -96,6 +96,62 @@ your organization's admin and you have both consented. See
 
 Release history is in [CHANGELOG.md](CHANGELOG.md).
 
+## Install from npm (Codex)
+
+Each release tag is also published to npm as `@k2-tek/k2`, with an npm provenance attestation that
+links the package to the GitHub Actions run that built it from this repository. The package is the
+marketplace exactly as tagged (`.claude-plugin/`, `plugins/k2/`, `plugins/k2-memory-hooks/`,
+`LICENSE`, `README.md`): it has no install scripts and no dependencies, so installing it runs
+nothing. Use it when you want Codex to install from the npm registry instead of from GitHub.
+Publishing to npm starts with the first release after v0.4.0; until that version is on npm, use the
+GitHub install above.
+
+Codex adds a marketplace from a local path, so install the package into a directory you keep, then
+point Codex at it. Always pin the version:
+
+```sh
+npm install --prefix ~/.k2-npm --ignore-scripts @k2-tek/k2@0.4.0
+codex plugin marketplace add ~/.k2-npm/node_modules/@k2-tek/k2
+codex plugin add k2@k2
+```
+
+To upgrade, install the newer version into the same directory and add the plugin again:
+
+```sh
+npm install --prefix ~/.k2-npm --ignore-scripts @k2-tek/k2@X.Y.Z
+codex plugin add k2@k2
+```
+
+In a setup script, the same install can be made to report a failure without stopping the script:
+
+```sh
+{ npm install --prefix ~/.k2-npm --ignore-scripts @k2-tek/k2@0.4.0 && codex plugin marketplace add ~/.k2-npm/node_modules/@k2-tek/k2 && codex plugin add k2@k2; } || echo "k2 npm install failed (see above)" >&2
+```
+
+This marketplace is also named `k2`, so use either the npm copy or the GitHub one, not both.
+
+**Claude Code:** use the GitHub marketplace (`claude plugin marketplace add K2-Rocket-Apps/k2`, see
+above). Installing Claude Code plugins from npm is not supported here.
+
+**Verify the provenance** of the package you installed:
+
+```sh
+cd ~/.k2-npm && npm audit signatures
+```
+
+It should report the `@k2-tek/k2` package as having a verified registry signature and a verified
+attestation. The package page on npmjs.com shows the same provenance, linked to the workflow run.
+
+**How it is published.** `.github/workflows/publish-npm.yml` publishes with npm
+**trusted publishing** (OIDC): no npm token is stored in this repository. It runs only for a release tag,
+called by `release.yml` after the GitHub Release is created (or on a pushed `v` tag), checks out
+that tag, confirms it is on `main`, runs the version gate (the tag must equal `package.json` and
+every plugin manifest) and `scripts/validate-npm-package.sh`, and then runs
+`npm publish --provenance`. Pull requests run `.github/workflows/validate-npm.yml`, which never
+publishes. For maintainers: npm checks the file name of the workflow that *started* the run, so the
+package's trusted publishers on npmjs.com must list both `release.yml` and `publish-npm.yml` for
+`K2-Rocket-Apps/k2`, each with the environment `npm-publish`.
+
 ## Security
 
 CI for this repository runs on GitHub-hosted runners only. Release tags (`v*`) are immutable. To report a vulnerability, see [SECURITY.md](SECURITY.md).

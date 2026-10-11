@@ -1,0 +1,32 @@
+{
+  "name": "@k2-tek/k2",
+  "version": "0.4.0",
+  "description": "The public K2 plugin marketplace for Codex, mirrored to npm from each tagged release of K2-Rocket-Apps/k2.",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/K2-Rocket-Apps/k2",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/K2-Rocket-Apps/k2.git"
+  },
+  "bugs": {
+    "url": "https://github.com/K2-Rocket-Apps/k2/issues"
+  },
+  "keywords": [
+    "codex",
+    "codex-plugin",
+    "claude-code",
+    "plugin-marketplace",
+    "k2"
+  ],
+  "files": [
+    ".claude-plugin/",
+    "plugins/k2/",
+    "plugins/k2-memory-hooks/",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
