@@ -44,6 +44,30 @@ jobs:
       - name: Validate the k2 plugin
         run: claude plugin validate plugins/k2 --strict
 
+      - name: Validate the opt-in k2-memory-hooks plugin (manifest and hooks.json)
+        run: claude plugin validate plugins/k2-memory-hooks --strict
+
+      - name: Installing k2 enables only k2, never the opt-in hooks plugin
+        # Throwaway HOME and config dir: nothing touches the runner's real settings.
+        run: |
+          set -euo pipefail
+          HOME="$(mktemp -d)"
+          export HOME
+          export CLAUDE_CONFIG_DIR="$HOME/.claude"
+          claude plugin marketplace add "$GITHUB_WORKSPACE"
+          claude plugin install k2@k2 --scope user
+          python3 - <<'PY'
+          import json, os, pathlib
+          config = pathlib.Path(os.environ["CLAUDE_CONFIG_DIR"])
+          enabled = json.loads((config / "settings.json").read_text())["enabledPlugins"]
+          # The enabledPlugins equality is the authoritative isolation check; the hooks.json
+          # scan below is a secondary guard only.
+          assert enabled == {"k2@k2": True}, enabled
+          stray = sorted(str(p) for p in config.rglob("hooks.json"))
+          assert stray == [], stray
+          print("OK: only k2@k2 is enabled and no hooks were installed")
+          PY
+
   pytest:
     # Repo-specific conventions and the public-package policy
     # (tests/test_public_package_policy.py).
@@ -117,6 +141,9 @@ jobs:
           for skill in mcp-step-up-approval cross-repo-code-lookup memory-orchestrate k2-connect; do
             test -f "$skills/$skill/SKILL.md" || { echo "missing $skills/$skill/SKILL.md"; exit 1; }
           done
+
+      - name: The opt-in hooks plugin was not installed with k2
+        run: test ! -e "$CODEX_HOME/plugins/cache/k2/k2-memory-hooks"
 
       - name: Installed plugin contributes no MCP server
         run: |
