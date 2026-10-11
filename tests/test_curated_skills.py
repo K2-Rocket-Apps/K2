@@ -7,6 +7,7 @@ ALLOWED_SKILLS here, in the same change that adds the skill.
 """
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -91,6 +92,6 @@ def test_allow_list_check_rejects_unlisted_skill(tmp_path, monkeypatch):
     skills = tmp_path / "skills"
     (skills / "memory-orchestrate").mkdir(parents=True)
     (skills / "something-else").mkdir()
-    monkeypatch.setattr(__import__(__name__), "SKILLS_DIR", skills)
+    monkeypatch.setattr(sys.modules[__name__], "SKILLS_DIR", skills)
     with pytest.raises(AssertionError):
         test_skill_folders_are_allow_listed()

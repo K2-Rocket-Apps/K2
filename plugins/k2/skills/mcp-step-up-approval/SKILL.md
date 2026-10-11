@@ -60,7 +60,7 @@ The manual flow:
    for the current OS:
    - macOS: `open "<url>"`
    - Linux: `xdg-open "<url>"`
-   - Windows: `start "<url>"`
+   - Windows: `start "" "<url>"` (the empty first argument is the window title)
 2. Tell the person briefly that you opened it and what they need to do: sign in (password plus a
    fresh authenticator code) and approve the request.
 3. Once they confirm they saw an explicit success message on the approval page (not just that they
