@@ -91,7 +91,7 @@ jobs:
         run: |
           version="$(python3 -c 'import json; print(json.load(open("plugins/k2/.claude-plugin/plugin.json"))["version"])')"
           skills="$CODEX_HOME/plugins/cache/k2/k2/$version/skills"
-          for skill in mcp-step-up-approval cross-repo-code-lookup memory-orchestrate; do
+          for skill in mcp-step-up-approval cross-repo-code-lookup memory-orchestrate k2-connect; do
             test -f "$skills/$skill/SKILL.md" || { echo "missing $skills/$skill/SKILL.md"; exit 1; }
           done
 
