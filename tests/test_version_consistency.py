@@ -387,7 +387,7 @@ def test_hook_plugin_content_change_requires_a_bump():
 def test_release_gate_reads_the_real_hook_plugin_manifest(tmp_path):
     root = tmp_path / "repo"
     for rel in (vc.MARKETPLACE_JSON, vc.CLAUDE_PLUGIN_JSON, vc.CODEX_PLUGIN_JSON, vc.HOOK_PLUGIN_JSON,
-                vc.PACKAGE_JSON, vc.CHANGELOG):
+                vc.PACKAGE_JSON, vc.SERVER_JSON, vc.CHANGELOG):
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO_ROOT / rel, root / rel)
     version = json.loads((root / vc.MARKETPLACE_JSON).read_text())["metadata"]["version"]
@@ -439,7 +439,7 @@ def test_real_package_json_matches_the_manifests():
 def _release_fixture(tmp_path):
     root = tmp_path / "repo"
     for rel in (vc.MARKETPLACE_JSON, vc.CLAUDE_PLUGIN_JSON, vc.CODEX_PLUGIN_JSON, vc.HOOK_PLUGIN_JSON,
-                vc.PACKAGE_JSON, vc.CHANGELOG):
+                vc.PACKAGE_JSON, vc.SERVER_JSON, vc.CHANGELOG):
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO_ROOT / rel, root / rel)
     version = json.loads((root / vc.MARKETPLACE_JSON).read_text())["metadata"]["version"]
@@ -495,8 +495,8 @@ def test_pr_mode_fails_when_manifests_bump_without_package_json(fixture_repo, ca
 # --------------------------------------------------------------------------
 
 
-def test_release_has_exactly_the_release_and_npm_jobs():
-    assert set(_workflow("release.yml")["jobs"]) == {"release", "npm"}
+def test_release_has_exactly_the_release_npm_and_mcp_registry_jobs():
+    assert set(_workflow("release.yml")["jobs"]) == {"release", "npm", "mcp-registry"}
 
 
 def test_release_npm_job_calls_publish_npm_after_the_release():
@@ -508,3 +508,86 @@ def test_release_npm_job_calls_publish_npm_after_the_release():
     assert job["with"]["tag"] == _workflow("release.yml")["jobs"]["release"]["env"]["TAG"]
     assert job["permissions"] == {"contents": "read", "id-token": "write"}
     assert "secrets" not in job
+
+
+# --------------------------------------------------------------------------
+# The MCP Registry listing's server.json is a version source too
+# --------------------------------------------------------------------------
+
+
+def _server(version):
+    return {"name": "com.example/x", "version": version}
+
+
+def test_check_accepts_server_json_at_the_tag_version():
+    args = (_market("0.4.0"), _plugin("0.4.0"), _plugin("0.4.0"), _plugin("0.4.0"), _package("0.4.0"))
+    assert check("v0.4.0", *args, _server("0.4.0")) == []
+
+
+def test_check_rejects_server_json_that_differs_from_the_manifests():
+    args = (_market("0.4.0"), _plugin("0.4.0"), _plugin("0.4.0"), _plugin("0.4.0"), _package("0.4.0"))
+    errors = check("v0.4.0", *args, _server("0.4.1"))
+    assert errors and any("server.json" in e for e in errors)
+
+
+@pytest.mark.parametrize("bad", ["0.4", "^0.4.0", "0.4.0-rc1", None])
+def test_check_rejects_a_non_semver_server_json_version(bad):
+    args = (_market("0.4.0"), _plugin("0.4.0"), _plugin("0.4.0"), _plugin("0.4.0"), _package("0.4.0"))
+    assert check("v0.4.0", *args, _server(bad))
+
+
+def test_real_server_json_matches_the_manifests():
+    server = json.loads((REPO_ROOT / vc.SERVER_JSON).read_text())
+    claude = json.loads((REPO_ROOT / vc.CLAUDE_PLUGIN_JSON).read_text())
+    assert server["version"] == claude["version"]
+
+
+def test_release_cli_fails_when_server_json_differs(tmp_path, capsys):
+    root, version = _release_fixture(tmp_path)
+    assert vc.main(["--tag", f"v{version}"], root=root) == 0
+    data = json.loads((root / vc.SERVER_JSON).read_text())
+    data["version"] = "9.9.9"
+    (root / vc.SERVER_JSON).write_text(json.dumps(data))
+    assert vc.main(["--tag", f"v{version}"], root=root) == 1
+    assert "server.json version" in capsys.readouterr().err
+
+
+def test_release_cli_fails_closed_without_server_json(tmp_path, capsys):
+    root, version = _release_fixture(tmp_path)
+    (root / vc.SERVER_JSON).unlink()
+    assert vc.main(["--tag", f"v{version}"], root=root) == 1
+    assert "server.json: missing" in capsys.readouterr().err
+
+
+def test_pr_mode_fails_when_manifests_bump_without_server_json(fixture_repo, capsys):
+    base_version = json.loads((fixture_repo / vc.CLAUDE_PLUGIN_JSON).read_text())["version"]
+    (fixture_repo / vc.SERVER_JSON).write_text(json.dumps(_server(base_version)) + "\n")
+    _git(fixture_repo, "add", "-A")
+    _git(fixture_repo, "commit", "-qm", "add server.json")
+    (fixture_repo / "plugins/k2/skills/x/SKILL.md").write_text("v2\n")
+    _bump(fixture_repo, "99.0.0")
+    _git(fixture_repo, "commit", "-qam", "bump manifests only")
+    assert vc.main(["--base", "base"], root=fixture_repo) == 1
+    assert "server.json version" in capsys.readouterr().err
+    (fixture_repo / vc.SERVER_JSON).write_text(json.dumps(_server("99.0.0")) + "\n")
+    _git(fixture_repo, "commit", "-qam", "bump server.json too")
+    assert vc.main(["--base", "base"], root=fixture_repo) == 0
+
+
+# --------------------------------------------------------------------------
+# release.yml hands the released tag to publish-mcp-registry.yml
+# --------------------------------------------------------------------------
+
+
+def test_release_mcp_registry_job_calls_the_publisher_after_the_release():
+    wf = _workflow("release.yml")
+    job = wf["jobs"]["mcp-registry"]
+    assert job["needs"] == "release"
+    assert job["uses"] == "./.github/workflows/publish-mcp-registry.yml"
+    # Same tag expression as the release and npm jobs.
+    assert job["with"] == {"tag": wf["jobs"]["release"]["env"]["TAG"]}
+    assert job["permissions"] == {"contents": "read"}
+    # Exactly one secret, by name; never `secrets: inherit`.
+    assert job["secrets"] == {"MCP_REGISTRY_PRIVATE_KEY": "${{ secrets.MCP_REGISTRY_PRIVATE_KEY }}"}
+    for name, other in wf["jobs"].items():
+        assert other.get("secrets") != "inherit", name

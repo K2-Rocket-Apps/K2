@@ -153,6 +153,65 @@ npm checks the file name of the workflow that *started* the run, so the package'
 publisher on npmjs.com is `release.yml` for `K2-Rocket-Apps/k2`, with the environment
 `npm-publish`.
 
+## MCP Registry
+
+The MCP Gateway is listed on the official [MCP Registry](https://registry.modelcontextprotocol.io) as
+`com.k2-tek/gateway`. The listing is [`server.json`](server.json) in this repository, published at
+the version of each plugin release tag.
+
+**The templated URL.** Every organization has its own gateway host, so the listing does not name one.
+Its one remote is a template:
+
+```text
+https://{org_slug}.gateway.k2-tek.com/mcp
+```
+
+`org_slug` is a required variable with no default: your MCP client asks you for your organization's
+gateway subdomain (for example, `acme` gives `https://acme.gateway.k2-tek.com/mcp`). The remote
+declares no headers and no secret inputs. Sign-in is OAuth in your browser, so nothing in the listing
+carries a token, and no organization's host is published in it.
+
+**How it is published.** `.github/workflows/publish-mcp-registry.yml` has two entry points. On a pull
+request it runs `scripts/validate-server-json.sh` (the pinned 2025-12-11 schema with ajv, a
+description of at most 100 characters, no `headers`, no default `org_slug`, and a `version` equal to
+the latest `v[0-9]*` release tag; `agent-v*` tags never count) and proves the validator rejects every
+fixture in `tests/fixtures/server-json/`. For a release, `release.yml` calls it with the tag after the
+GitHub Release is created; it never runs from a tag push of its own. The publish job runs in the
+`mcp-registry` environment, which needs a maintainer's approval, then checks the version gate (the tag
+must equal `server.json` and every plugin manifest), checks that `https://gateway.k2-tek.com/docs`
+answers (it fails closed if not), installs a pinned, checksum-verified `mcp-publisher`, signs in with
+DNS authentication for `k2-tek.com`, and publishes.
+
+**DNS authentication.** The registry accepts `com.k2-tek/*` names from whoever holds the Ed25519 key
+whose public half is published in a TXT record at the `k2-tek.com` apex:
+
+```text
+v=MCPv1; k=ed25519; p=<base64 public key>
+```
+
+The private key is stored only as the `MCP_REGISTRY_PRIVATE_KEY` secret of the `mcp-registry`
+environment (hex, as `mcp-publisher login dns --private-key` expects). It is never committed, never
+printed in a log, and never stored as a repository-wide secret.
+
+**Key rotation.** For maintainers. No key material belongs in this repository, an issue or a log.
+
+1. On an offline machine, generate a new Ed25519 keypair, for example
+   `openssl genpkey -algorithm Ed25519 -out new.pem`. Derive the base64 public key
+   (`openssl pkey -in new.pem -pubout -outform DER | tail -c 32 | base64`) and the hex private key
+   (`openssl pkey -in new.pem -noout -text`, the `priv:` bytes without colons or spaces).
+2. **Add** a second apex TXT record, `v=MCPv1; k=ed25519; p=<new base64 public key>`, next to the
+   current one. Do not remove the old record yet. Wait until `dig +short TXT k2-tek.com` shows both.
+3. Replace the `MCP_REGISTRY_PRIVATE_KEY` secret of the `mcp-registry` environment with the new hex
+   private key.
+4. Publish once with the new key (the next release, or a re-run of the `mcp-registry` job of the
+   latest release, which skips publishing a version that is already listed but still proves nothing
+   else changed). A failed login means the new TXT record is not visible yet: wait and retry.
+5. **Remove** the old TXT record, then securely delete every copy of the old and new private keys
+   outside the environment secret.
+
+If the key is ever exposed, do the same steps at once and remove the old record immediately after
+step 3.
+
 ## Security
 
 CI for this repository runs on GitHub-hosted runners only. Release tags (`v*`) are immutable. To report a vulnerability, see [SECURITY.md](SECURITY.md).
