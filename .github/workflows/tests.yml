@@ -1,0 +1,17 @@
+name: tests
+
+on:
+  push:
+    branches: [develop, qa, main]
+  pull_request:
+    branches: [develop, qa, main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    uses: K2-Rocket-Apps/ci-workflows/.github/workflows/tests.yml@v1
+    with:
+      php-versions: '["8.4"]'
+    secrets: inherit
