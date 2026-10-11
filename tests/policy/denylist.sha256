@@ -1,0 +1,20 @@
+# SHA-256 of each lowercased denylisted string, then its length in characters.
+# Plain text is deliberately NOT stored: this repository is public, and the list
+# names internal things it must never leak. To add an entry, append
+#   <sha256 of the lowercased string> <length>
+# e.g. python3 -c "import hashlib,sys;s=sys.argv[1].lower();print(hashlib.sha256(s.encode()).hexdigest(),len(s))" 'text'
+d2e0d06f52ea5fdcbe6eb6dfea8797f384f711d30c8ba912167ca5a7e91484c5 28
+2cd0e3f7ef832229cf2f35e02477d699fd073561ca3f3a1a7e13aa3c95f69770 13
+b16e1dc7d6173421fd8f5e6d3512ef42adcf3bb9ebdb5a2ff1eef3ba18a7b271 20
+74ffd73d701afee97f2fc98348eb2ecf8832fdd2dc0db1ba3a31b76869898bd8 10
+0f46897e1b6f1a8b663cc39fe5a519d3095a3934d32aaa49cc7bd138ba8b83e4 7
+8f025eb4b67d0a27e5a158947202ddd9cb518f09ff64994c6d1b1911743d8352 8
+2990a8cce4cb860f1d5c1add2e8a04de279d6a50019ef51e133d7402de11b7ea 12
+da469e8f358c1d9af0a0fba083dd1291ec98db34fcdb95e9d85a70872b029425 18
+2dc236ca66a19c9ecdd3ec4fd9248b8a5edfd03c228fe263293062e7edfaf9d8 28
+420ba11bedc3a77d4288c1ddecf0252f0941f3dfa851b025556fcd21091a6c2e 17
+07b50c4f3c90ab8d06a3aa10b92c1eb59fda1d3275a9f0bdbe1fae708b8d163a 14
+bb82ebccaf6d6ca0a6bfe9d5deebaf369246b0aa1d0843a91ddfe893665c0195 18
+19635846dd0e767a11270296a317690b7910ef225d2150cf48fc38789b4db0e1 14
+a7fbd5b1036486342a64fb68245c6d2f8e9bf9f4226782cbf29ce4b3c9ea6381 12
+14000d281ccf4c88816b93d7cc45158272b11e8c35af7c9ff9c93e76857056ca 28
