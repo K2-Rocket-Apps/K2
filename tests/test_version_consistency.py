@@ -386,7 +386,8 @@ def test_hook_plugin_content_change_requires_a_bump():
 
 def test_release_gate_reads_the_real_hook_plugin_manifest(tmp_path):
     root = tmp_path / "repo"
-    for rel in (vc.MARKETPLACE_JSON, vc.CLAUDE_PLUGIN_JSON, vc.CODEX_PLUGIN_JSON, vc.HOOK_PLUGIN_JSON, vc.CHANGELOG):
+    for rel in (vc.MARKETPLACE_JSON, vc.CLAUDE_PLUGIN_JSON, vc.CODEX_PLUGIN_JSON, vc.HOOK_PLUGIN_JSON,
+                vc.PACKAGE_JSON, vc.CHANGELOG):
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO_ROOT / rel, root / rel)
     version = json.loads((root / vc.MARKETPLACE_JSON).read_text())["metadata"]["version"]
@@ -461,6 +462,32 @@ def test_release_cli_fails_when_only_package_json_matches_the_tag(tmp_path):
     data["version"] = "9.9.9"
     (root / vc.PACKAGE_JSON).write_text(json.dumps(data))
     assert vc.main(["--tag", "v9.9.9"], root=root) == 1
+
+
+def test_release_cli_fails_closed_without_package_json(tmp_path, capsys):
+    root, version = _release_fixture(tmp_path)
+    (root / vc.PACKAGE_JSON).unlink()
+    assert vc.main(["--tag", f"v{version}"], root=root) == 1
+    assert "package.json: missing" in capsys.readouterr().err
+
+
+def _with_package(root, version):
+    (root / vc.PACKAGE_JSON).write_text(json.dumps({"name": "@scope/k2", "version": version}) + "\n")
+
+
+def test_pr_mode_fails_when_manifests_bump_without_package_json(fixture_repo, capsys):
+    base_version = json.loads((fixture_repo / vc.CLAUDE_PLUGIN_JSON).read_text())["version"]
+    _with_package(fixture_repo, base_version)
+    _git(fixture_repo, "add", "-A")
+    _git(fixture_repo, "commit", "-qm", "add package.json")
+    (fixture_repo / "plugins/k2/skills/x/SKILL.md").write_text("v2\n")
+    _bump(fixture_repo, "99.0.0")
+    _git(fixture_repo, "commit", "-qam", "bump manifests only")
+    assert vc.main(["--base", "base"], root=fixture_repo) == 1
+    assert "package.json version" in capsys.readouterr().err
+    _with_package(fixture_repo, "99.0.0")
+    _git(fixture_repo, "commit", "-qam", "bump package.json too")
+    assert vc.main(["--base", "base"], root=fixture_repo) == 0
 
 
 # --------------------------------------------------------------------------

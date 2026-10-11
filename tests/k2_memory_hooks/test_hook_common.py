@@ -436,7 +436,9 @@ def test_scripts_exit_0_on_malformed_events(monkeypatch, capsys, script, stdin):
 def test_scripts_exit_0_as_real_subprocesses_without_k2_agent(tmp_path, script):
     repo = _git_repo(tmp_path / "repo")
     git_dir = os.path.dirname(subprocess.run(["which", "git"], capture_output=True, text=True).stdout.strip())
-    env = {"PATH": git_dir, "HOME": str(tmp_path)}
+    # A minimal env, so PYTHONDONTWRITEBYTECODE is set here explicitly: no
+    # bytecode may be left under plugins/ (it would be packed for npm).
+    env = {"PATH": git_dir, "HOME": str(tmp_path), "PYTHONDONTWRITEBYTECODE": "1"}
     event = _friction_event(repo) if script == "friction" else {"cwd": str(repo)}
     result = subprocess.run(
         [sys.executable, str(HOOKS_DIR / f"{script}.py")],

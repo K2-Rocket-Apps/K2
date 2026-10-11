@@ -143,14 +143,15 @@ It should report the `@k2-tek/k2` package as having a verified registry signatur
 attestation. The package page on npmjs.com shows the same provenance, linked to the workflow run.
 
 **How it is published.** `.github/workflows/publish-npm.yml` publishes with npm
-**trusted publishing** (OIDC): no npm token is stored in this repository. It runs only for a release tag,
-called by `release.yml` after the GitHub Release is created (or on a pushed `v` tag), checks out
+**trusted publishing** (OIDC): no npm token is stored in this repository. It has one entry point:
+`release.yml` calls it for a release tag, only after the GitHub Release is created. It checks out
 that tag, confirms it is on `main`, runs the version gate (the tag must equal `package.json` and
-every plugin manifest) and `scripts/validate-npm-package.sh`, and then runs
-`npm publish --provenance`. Pull requests run `.github/workflows/validate-npm.yml`, which never
-publishes. For maintainers: npm checks the file name of the workflow that *started* the run, so the
-package's trusted publishers on npmjs.com must list both `release.yml` and `publish-npm.yml` for
-`K2-Rocket-Apps/k2`, each with the environment `npm-publish`.
+every plugin manifest) and the test suite, then runs `scripts/validate-npm-package.sh` (which also
+rejects any packed file that git does not track), and only then runs `npm publish --provenance`.
+Pull requests run `.github/workflows/validate-npm.yml`, which never publishes. For maintainers:
+npm checks the file name of the workflow that *started* the run, so the package's trusted
+publisher on npmjs.com is `release.yml` for `K2-Rocket-Apps/k2`, with the environment
+`npm-publish`.
 
 ## Security
 

@@ -206,6 +206,10 @@ def release_errors(root: Path, tag: str) -> list[str]:
         _load(hook_manifest) if hook_manifest.exists() else None,
         _load(package) if package.exists() else None,
     )
+    if not package.exists():
+        # Fail closed: the npm mirror publishes from this tag, so its version
+        # source must exist and match.
+        errors.append(f"{PACKAGE_JSON}: missing (the npm mirror's version must equal the tag)")
     changelog = root / CHANGELOG
     text = changelog.read_text(encoding="utf-8") if changelog.exists() else ""
     if changelog_section(text, tag) is None:
@@ -213,9 +217,26 @@ def release_errors(root: Path, tag: str) -> list[str]:
     return errors
 
 
+def _package_version_at(root: Path, ref: str) -> str | None:
+    try:
+        return json.loads(_git(root, "show", f"{ref}:{PACKAGE_JSON}")).get("version")
+    except subprocess.CalledProcessError:
+        return None
+
+
 def pr_errors(root: Path, base: str, head: str) -> list[str]:
     changed = [f for f in _git(root, "diff", "--name-only", f"{base}...{head}").splitlines() if f]
-    return requires_version_bump(changed, _version_at(root, base), _version_at(root, head))
+    head_version = _version_at(root, head)
+    errors = requires_version_bump(changed, _version_at(root, base), head_version)
+    # Catch a manifest bump without the matching package.json bump on the PR,
+    # not at tag time.
+    package_version = _package_version_at(root, head)
+    if package_version is not None and package_version != head_version:
+        errors.append(
+            f"{PACKAGE_JSON} version {package_version!r} differs from {CLAUDE_PLUGIN_JSON} "
+            f"version {head_version!r}; bump them together."
+        )
+    return errors
 
 
 def main(argv: list[str] | None = None, root: Path = REPO_ROOT) -> int:

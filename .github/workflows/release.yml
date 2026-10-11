@@ -117,11 +117,11 @@ jobs:
 
   npm:
     # Mirror the released tag to npm (publish-npm.yml), only after the GitHub
-    # Release above succeeded. Called rather than left to publish-npm.yml's own
-    # tag trigger, because a tag this workflow creates on dispatch (with the job
-    # token) never starts a `push: tags` workflow. npm trusted publishing checks
-    # THIS file's name for a called workflow, so `release.yml` must be one of
-    # the package's trusted publishers.
+    # Release above succeeded. This is publish-npm.yml's only entry point: it
+    # has no tag trigger of its own (a tag this workflow creates on dispatch,
+    # with the job token, would never start one anyway). npm trusted publishing
+    # checks THIS file's name for a called workflow, so `release.yml` is the
+    # package's trusted publisher.
     needs: release
     uses: ./.github/workflows/publish-npm.yml
     with:

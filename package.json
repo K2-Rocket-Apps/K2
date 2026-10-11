@@ -23,7 +23,9 @@
     "plugins/k2/",
     "plugins/k2-memory-hooks/",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "!**/__pycache__/**",
+    "!**/*.py[co]"
   ],
   "publishConfig": {
     "access": "public",

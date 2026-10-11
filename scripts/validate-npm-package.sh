@@ -21,15 +21,23 @@
 #      requires it) and `license` matches the plugin manifests.
 #   3. `npm pack --dry-run --json` lists only allow-listed paths:
 #      package.json, LICENSE, README.md, .claude-plugin/** and the trees of
-#      the plugins the marketplace lists. The k2 plugin must be present, and
-#      every plugin the packed marketplace.json lists must be packed too.
+#      the plugins the marketplace lists. The marketplace may list only the
+#      plugins pinned in ALLOWED_PLUGINS below (adding one to the npm mirror
+#      is a deliberate edit here), the k2 plugin must be present, and every
+#      plugin the packed marketplace.json lists must be packed too.
+#   3a. No packed path is build or cache output (`__pycache__/`, `*.pyc`,
+#      `*.pyo`, `.pytest_cache/`, `.DS_Store`), and, when <package-root> is a
+#      git checkout, every packed path is tracked by git. Running the test
+#      suite writes bytecode under plugins/, and npm does not apply
+#      .gitignore to `files` entries, so this keeps the tarball equal to the
+#      git tree of the tag.
 #   4. No packed file contains a gateway token prefix (`mgw_` followed by an
 #      alphanumeric).
 #   5. No URL in a packed `.mcp.json`, `plugin.json` or `marketplace.json`
 #      contains `${` (an unexpanded placeholder would reach users verbatim).
 #
-# Needs: npm and python3. Makes no network call and writes nothing outside a
-# temporary file that is removed on exit.
+# Needs: npm and python3 (and git, for a git checkout). Makes no network call
+# and writes nothing outside a temporary file that is removed on exit.
 set -euo pipefail
 
 fail() {
@@ -118,6 +126,7 @@ PY
 python3 - "$ROOT" "$LISTING" <<'PY'
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -148,6 +157,14 @@ except (OSError, json.JSONDecodeError, AttributeError) as exc:
 if "plugins/k2" not in plugin_dirs:
     errors.append(f"{MARKETPLACE}: must list the k2 plugin at ./plugins/k2")
 
+# Publishing another plugin to npm must be a deliberate edit here, never a
+# side effect of listing it in the marketplace.
+ALLOWED_PLUGINS = {"plugins/k2", "plugins/k2-memory-hooks"}
+for d in plugin_dirs:
+    if d not in ALLOWED_PLUGINS:
+        errors.append(f"{MARKETPLACE}: plugin ./{d} is not in the npm mirror's pinned plugin set ({', '.join(sorted(ALLOWED_PLUGINS))})")
+plugin_dirs = [d for d in plugin_dirs if d in ALLOWED_PLUGINS]
+
 allowed_prefixes = (".claude-plugin/",) + tuple(f"{d}/" for d in plugin_dirs)
 
 
@@ -160,6 +177,34 @@ for path in packed:
         errors.append(f"{path}: packed file is outside the allow-list (package.json, LICENSE, README.md, .claude-plugin/, {', '.join(d + '/' for d in plugin_dirs)})")
     if Path(path).name == "binding.gyp":
         errors.append(f"{path}: a native build file would run node-gyp at install time")
+    parts = path.split("/")
+    if (
+        "__pycache__" in parts
+        or ".pytest_cache" in parts
+        or path.endswith((".pyc", ".pyo"))
+        or parts[-1] == ".DS_Store"
+    ):
+        errors.append(f"{path}: build or cache output must never be packed (it is not in git)")
+
+# In a git checkout, the tarball must be a subset of the tracked tree.
+try:
+    top = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+except (OSError, subprocess.CalledProcessError):
+    top = ""
+in_git = bool(top) and Path(top).resolve() == root.resolve()
+if in_git:
+    tracked = set(
+        subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z"],
+            capture_output=True, text=True, check=True,
+        ).stdout.split("\0")
+    )
+    for path in packed:
+        if path not in tracked:
+            errors.append(f"{path}: packed but not tracked by git (an npm install must match a git install of the same tag)")
 
 required = {"package.json", MARKETPLACE} | {f"{d}/.claude-plugin/plugin.json" for d in plugin_dirs}
 required.add("plugins/k2/.codex-plugin/plugin.json")
@@ -205,5 +250,6 @@ for error in errors:
     print(f"validate-npm-package: FAIL: {error}", file=sys.stderr)
 if errors:
     sys.exit(1)
-print(f"validate-npm-package: OK: {len(packed)} files, all allow-listed, no lifecycle scripts, no token prefix, no placeholder URL.")
+git_note = " and git-tracked" if in_git else ""
+print(f"validate-npm-package: OK: {len(packed)} files, all allow-listed{git_note}, no build output, no lifecycle scripts, no token prefix, no placeholder URL.")
 PY

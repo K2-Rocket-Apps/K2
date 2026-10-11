@@ -26,7 +26,16 @@ README = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 needs_npm = pytest.mark.skipif(shutil.which("npm") is None, reason="npm is not on PATH")
 
 # What the package may ship: the git marketplace root, nothing else.
-PACKAGE_FILES = [".claude-plugin/", "plugins/k2/", "plugins/k2-memory-hooks/", "LICENSE", "README.md"]
+PACKAGE_FILES = [
+    ".claude-plugin/",
+    "plugins/k2/",
+    "plugins/k2-memory-hooks/",
+    "LICENSE",
+    "README.md",
+    # Never pack bytecode the test suite (or a user) left under plugins/.
+    "!**/__pycache__/**",
+    "!**/*.py[co]",
+]
 
 
 def _workflow(name: str) -> dict:
@@ -118,6 +127,12 @@ def test_npm_pack_lists_only_allow_listed_paths_and_no_token():
     roots = {"package.json", "LICENSE", "README.md"}
     prefixes = (".claude-plugin/", "plugins/k2/", "plugins/k2-memory-hooks/")
     assert [p for p in paths if p not in roots and not p.startswith(prefixes)] == []
+    assert [p for p in paths if "__pycache__" in p.split("/") or p.endswith((".pyc", ".pyo"))] == []
+    # The tarball is a subset of the git tree: nothing untracked is packed.
+    tracked = set(subprocess.run(
+        ["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.split("\0"))
+    assert [p for p in paths if p not in tracked] == []
     assert {"package.json", ".claude-plugin/marketplace.json", "plugins/k2/.codex-plugin/plugin.json"} <= set(paths)
     for path in paths:
         assert not re.search(r"mgw_[A-Za-z0-9]", (REPO_ROOT / path).read_text(encoding="utf-8", errors="replace")), path
@@ -130,7 +145,7 @@ def package_copy(tmp_path):
     for name in ("package.json", "LICENSE", "README.md"):
         shutil.copy(REPO_ROOT / name, root / name)
     for name in (".claude-plugin", "plugins"):
-        shutil.copytree(REPO_ROOT / name, root / name, ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copytree(REPO_ROOT / name, root / name)
     return root
 
 
@@ -233,6 +248,70 @@ def test_rejects_an_unsafe_package_json(package_copy, mutate, needle):
 
 
 @needs_npm
+def test_bytecode_is_never_packed_by_default(package_copy):
+    """The `files` negations keep bytecode out of the tarball even if it exists."""
+    cache = package_copy / "plugins" / "k2-memory-hooks" / "hooks" / "__pycache__"
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "planted.cpython-313.pyc").write_bytes(b"\x00bytecode")
+    result = _run(package_copy)
+    assert result.returncode == 0, result.stderr
+    out = subprocess.run(
+        ["npm", "pack", "--dry-run", "--json", "--ignore-scripts"],
+        cwd=package_copy, capture_output=True, text=True, check=True, timeout=120,
+    ).stdout
+    assert not [f["path"] for f in json.loads(out)[0]["files"] if "__pycache__" in f["path"]]
+
+
+@needs_npm
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "plugins/k2-memory-hooks/hooks/__pycache__/planted.cpython-313.pyc",
+        "plugins/k2-memory-hooks/hooks/stray.pyc",
+        "plugins/k2/.pytest_cache/v/cache/lastfailed",
+    ],
+)
+def test_rejects_packed_build_output(package_copy, rel):
+    """Without the negations, the validator itself refuses build/cache output."""
+    _edit_json(package_copy / "package.json", lambda d: d.update(files=[f for f in d["files"] if not f.startswith("!")]))
+    target = package_copy / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"\x00bytecode")
+    result = _run(package_copy)
+    assert result.returncode != 0
+    assert f"{rel}: build or cache output must never be packed" in result.stderr
+
+
+@needs_npm
+def test_rejects_a_packed_file_git_does_not_track(package_copy):
+    """In a git checkout, every packed file must be tracked by git."""
+    git = lambda *a: subprocess.run(["git", *a], cwd=package_copy, capture_output=True, text=True, check=True)  # noqa: E731
+    git("init", "-q")
+    git("add", "-A")
+    assert _run(package_copy).returncode == 0
+    (package_copy / "plugins" / "k2" / "untracked.md").write_text("not in git\n", encoding="utf-8")
+    result = _run(package_copy)
+    assert result.returncode != 0
+    assert "plugins/k2/untracked.md: packed but not tracked by git" in result.stderr
+
+
+@needs_npm
+def test_rejects_a_plugin_outside_the_pinned_set(package_copy):
+    """Adding a plugin to the npm mirror is a deliberate edit to the validator."""
+    extra = package_copy / "plugins" / "extra" / ".claude-plugin"
+    extra.mkdir(parents=True)
+    (extra / "plugin.json").write_text('{"name": "extra", "version": "0.4.0"}\n', encoding="utf-8")
+    _edit_json(
+        package_copy / ".claude-plugin" / "marketplace.json",
+        lambda d: d["plugins"].append({"name": "extra", "source": "./plugins/extra"}),
+    )
+    _edit_json(package_copy / "package.json", lambda d: d["files"].insert(0, "plugins/extra/"))
+    result = _run(package_copy)
+    assert result.returncode != 0
+    assert "plugin ./plugins/extra is not in the npm mirror's pinned plugin set" in result.stderr
+
+
+@needs_npm
 def test_rejects_a_package_missing_a_listed_plugin(package_copy):
     # A marketplace entry whose directory is not packed would install from git
     # but not from npm.
@@ -253,11 +332,11 @@ def _publish_job() -> dict:
     return jobs["publish"]
 
 
-def test_publish_triggers_only_on_a_version_tag_or_a_call():
+def test_publish_triggers_only_when_release_yml_calls_it():
+    # No tag trigger of its own: a hand-pushed tag reaches npm only through
+    # release.yml, after the GitHub Release succeeded.
     on = _workflow("publish-npm.yml")["on"]
-    assert set(on) == {"push", "workflow_call"}
-    # Never bare `v*`: other tag families may exist.
-    assert on["push"] == {"tags": ["v[0-9]*"]}
+    assert set(on) == {"workflow_call"}
     assert on["workflow_call"]["inputs"] == {
         "tag": {"description": on["workflow_call"]["inputs"]["tag"]["description"], "required": True, "type": "string"}
     }
@@ -270,8 +349,9 @@ def test_publish_permissions_and_environment():
     job = _publish_job()
     assert job["permissions"] == {"contents": "read", "id-token": "write"}
     assert job["environment"] == "npm-publish"
-    assert job["concurrency"] == {"group": "publish-npm-${{ inputs.tag || github.ref_name }}", "cancel-in-progress": False}
-    assert job["env"]["TAG"] == "${{ inputs.tag || github.ref_name }}"
+    assert job["concurrency"] == {"group": "publish-npm-${{ inputs.tag }}", "cancel-in-progress": False}
+    assert job["env"]["TAG"] == "${{ inputs.tag }}"
+    assert job["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
 
 
 def test_no_npm_token_anywhere():
@@ -298,15 +378,16 @@ def test_publish_steps_run_in_order():
         _index(steps, uses("actions/checkout@"), "checkout"),
         _index(steps, run('tests/version_consistency.py --tag "$TAG"'), "version gate"),
         _index(steps, run("git merge-base --is-ancestor"), "main ancestry check"),
-        _index(steps, run("scripts/validate-npm-package.sh"), "validator"),
         _index(steps, run("pytest tests/"), "pytest"),
+        # After pytest: the last look at the tree before publish.
+        _index(steps, run("scripts/validate-npm-package.sh"), "validator"),
         _index(steps, run("npm view"), "already-published check"),
         _index(steps, run("npm publish"), "npm publish"),
     ]
     assert order == sorted(order), order
 
     checkout = steps[order[0]]["with"]
-    assert checkout["ref"] == "refs/tags/${{ inputs.tag || github.ref_name }}"
+    assert checkout["ref"] == "refs/tags/${{ inputs.tag }}"
     assert checkout["persist-credentials"] is False
 
     publish = steps[order[-1]]
