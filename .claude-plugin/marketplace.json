@@ -1,0 +1,18 @@
+{
+  "name": "k2",
+  "owner": {
+    "name": "K2-Rocket-Apps",
+    "url": "https://github.com/K2-Rocket-Apps"
+  },
+  "metadata": {
+    "description": "The public K2 plugin marketplace for Claude Code and Codex.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "k2",
+      "source": "./plugins/k2",
+      "description": "Connect your coding agent to your organization's K2 MCP Gateway and Memory."
+    }
+  ]
+}
