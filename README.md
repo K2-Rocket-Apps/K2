@@ -63,8 +63,8 @@ codex plugin marketplace upgrade k2
 
 ### Claude Code on the web
 
-Add this line to your environment's setup script. A failed install is reported but never blocks the
-session from starting:
+Add this line as the **last** line of your environment's setup script (its trailing `exit 0` ends the
+script). A failed install is reported but never blocks the session from starting:
 
 ```sh
 claude plugin marketplace add K2-Rocket-Apps/k2 && claude plugin install k2@k2 --scope user || echo "k2 plugin install failed (see above)" >&2; exit 0

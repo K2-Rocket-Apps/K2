@@ -271,6 +271,7 @@ def test_release_steps_run_in_order():
     order = [
         _step_index(steps, uses("actions/checkout@"), "checkout"),
         _step_index(steps, run('tests/version_consistency.py --tag "$GITHUB_REF_NAME"'), "version gate"),
+        _step_index(steps, run("git merge-base --is-ancestor"), "main ancestry check"),
         _step_index(steps, run("pytest tests/"), "pytest"),
         _step_index(steps, run("git archive --format=tar.gz"), "git archive"),
         _step_index(steps, run("> SHA256SUMS"), "SHA256SUMS"),
@@ -279,14 +280,14 @@ def test_release_steps_run_in_order():
     ]
     assert order == sorted(order), order
 
-    archive = steps[order[3]]["run"]
+    archive = steps[order[4]]["run"]
     assert '--prefix="k2-${GITHUB_REF_NAME}/"' in archive
-    assert '-o "k2-${GITHUB_REF_NAME}.tar.gz" "$GITHUB_REF_NAME"' in archive
+    assert '-o "k2-${GITHUB_REF_NAME}.tar.gz" "refs/tags/${GITHUB_REF_NAME}"' in archive
 
-    subjects = steps[order[5]]["with"]["subject-path"]
+    subjects = steps[order[6]]["with"]["subject-path"]
     assert "k2-${{ github.ref_name }}.tar.gz" in subjects and "SHA256SUMS" in subjects
 
-    publish = steps[order[6]]["run"]
+    publish = steps[order[7]]["run"]
     for flag in ("--verify-tag", "--latest", "--notes-file", "SHA256SUMS", 'k2-${GITHUB_REF_NAME}.tar.gz'):
         assert flag in publish
     # The version gate is the first thing that can fail: nothing runs before it

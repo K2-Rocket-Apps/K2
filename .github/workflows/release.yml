@@ -5,7 +5,8 @@ name: release
 #
 # Order is load-bearing: the version gate runs first, so a tag that does not
 # match every manifest version fails the run before anything is built and no
-# Release is created. Then the full test suite, then the source archive, its
+# Release is created. A tag whose commit is not reachable from main fails next.
+# Then the full test suite, then the source archive, its
 # checksum file, a provenance attestation for both, and finally the Release.
 #
 # Runs only on a tag push, on a GitHub-hosted runner. Nothing here updates an
@@ -41,6 +42,13 @@ jobs:
       - name: Version gate (tag must equal every manifest version)
         run: python tests/version_consistency.py --tag "$GITHUB_REF_NAME"
 
+      - name: Tag must be on main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --quiet origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD \
+            || { echo "::error::$GITHUB_REF_NAME is not reachable from main"; exit 1; }
+
       - run: pip install -r tests/requirements.txt
 
       - name: Full test suite
@@ -50,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           git archive --format=tar.gz --prefix="k2-${GITHUB_REF_NAME}/" \
-            -o "k2-${GITHUB_REF_NAME}.tar.gz" "$GITHUB_REF_NAME"
+            -o "k2-${GITHUB_REF_NAME}.tar.gz" "refs/tags/${GITHUB_REF_NAME}"
           sha256sum "k2-${GITHUB_REF_NAME}.tar.gz" > SHA256SUMS
           cat SHA256SUMS
 
