@@ -36,11 +36,20 @@ CACHE_EXCLUDES = frozenset({"__pycache__", ".pytest_cache", "node_modules"})
 
 PRIMARY_PLUGIN = "k2"
 
-# Plugins that may ship hooks. Empty today: the hooks ban applies to every
-# plugin directory. A future opt-in hooks plugin is added here by name (and
-# must also be on tests/policy/allowed_plugins.txt). PRIMARY_PLUGIN may never
-# be added; test_primary_plugin_is_never_hook_permitted pins that.
-HOOK_PERMITTED_PLUGINS: frozenset[str] = frozenset()
+# The opt-in hooks plugin. It is the ONLY plugin that may ship hooks, and only
+# under the narrow rules in check_hook_plugin_scope (a single hooks/hooks.json
+# whose every command runs heartbeat.py or friction.py). It must also be on
+# tests/policy/allowed_plugins.txt. PRIMARY_PLUGIN may never be added;
+# test_primary_plugin_is_never_hook_permitted pins that.
+HOOK_PLUGIN = "k2-memory-hooks"
+HOOK_PERMITTED_PLUGINS: frozenset[str] = frozenset({HOOK_PLUGIN})
+
+# The only top-level entries the hooks plugin may contain, the only hook events
+# it may register, and the exact command shape every one of its hooks must use.
+HOOK_PLUGIN_TOP_LEVEL = frozenset({".claude-plugin", "hooks", "README.md"})
+HOOK_PLUGIN_EVENTS = frozenset({"Stop", "SubagentStop", "PreToolUse", "PostToolUse", "PostToolUseFailure"})
+HOOK_PLUGIN_SCRIPTS = frozenset({"heartbeat.py", "friction.py"})
+HOOK_COMMAND_RE = re.compile(r'^python3 "\$\{CLAUDE_PLUGIN_ROOT\}/hooks/(?P<script>[a-z_]+\.py)"$')
 
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -140,6 +149,10 @@ def _codex_manifest(root: Path) -> Path:
     return root / "plugins" / PRIMARY_PLUGIN / ".codex-plugin" / "plugin.json"
 
 
+def _hook_plugin_manifest(root: Path) -> Path:
+    return root / "plugins" / HOOK_PLUGIN / ".claude-plugin" / "plugin.json"
+
+
 def _plugin_dirs(root: Path) -> list[Path]:
     plugins = root / "plugins"
     if not plugins.is_dir():
@@ -186,10 +199,11 @@ def check_no_mcp_servers(root: Path) -> list[str]:
         elif codex["mcpServers"] != {}:
             errors.append(f"{_rel(root, _codex_manifest(root))}: \"mcpServers\" must be exactly {{}}")
 
-    claude, load_errors = _load_json(_claude_manifest(root))
-    errors += load_errors
-    if claude is not None and "mcpServers" in claude:
-        errors.append(f"{_rel(root, _claude_manifest(root))}: must not declare \"mcpServers\"")
+    for manifest in (_claude_manifest(root), _hook_plugin_manifest(root)):
+        claude, load_errors = _load_json(manifest)
+        errors += load_errors
+        if claude is not None and "mcpServers" in claude:
+            errors.append(f"{_rel(root, manifest)}: must not declare \"mcpServers\"")
 
     entries, load_errors = _marketplace_entries(root)
     errors += load_errors
@@ -229,6 +243,91 @@ def check_no_hooks(root: Path) -> list[str]:
         if "hooks" in entry and entry.get("name") not in HOOK_PERMITTED_PLUGINS:
             errors.append(f".claude-plugin/marketplace.json: plugin {entry.get('name')!r} must not declare \"hooks\"")
 
+    return errors
+
+
+def _hook_commands(hooks_json: dict) -> tuple[dict[str, list[dict]], list[str]]:
+    """{event: [hook objects]} from a hooks.json document, plus shape errors."""
+    errors: list[str] = []
+    events = hooks_json.get("hooks")
+    if not isinstance(events, dict):
+        return {}, ["'hooks' must be an object keyed by event name"]
+    found: dict[str, list[dict]] = {}
+    for event, groups in events.items():
+        if not isinstance(groups, list):
+            errors.append(f"{event}: must be a list of matcher groups")
+            continue
+        for group in groups:
+            inner = group.get("hooks") if isinstance(group, dict) else None
+            if not isinstance(inner, list):
+                errors.append(f"{event}: every matcher group needs a 'hooks' list")
+                continue
+            for hook in inner:
+                if not isinstance(hook, dict):
+                    errors.append(f"{event}: every hook must be an object")
+                    continue
+                found.setdefault(event, []).append(hook)
+    return found, errors
+
+
+def check_hook_plugin_scope(root: Path) -> list[str]:
+    """The narrow carve-out that lets the opt-in hooks plugin ship hooks at all.
+
+    `plugins/k2-memory-hooks/` may contain only its Claude manifest, a single
+    `hooks/hooks.json` and the scripts it runs, and a README. It has no Codex
+    manifest, no `hooks` key inline in any manifest or marketplace entry (that
+    would escape this check), and every hook is a `command` hook running
+    exactly `heartbeat.py` or `friction.py` on one of the allowed events.
+    """
+    plugin_dir = root / "plugins" / HOOK_PLUGIN
+    if not plugin_dir.is_dir():
+        return [f"plugins/{HOOK_PLUGIN}/: missing"]
+    errors: list[str] = []
+
+    for entry in sorted(plugin_dir.iterdir()):
+        if entry.name not in HOOK_PLUGIN_TOP_LEVEL:
+            errors.append(f"{_rel(root, entry)}: plugin {HOOK_PLUGIN!r} may contain only {sorted(HOOK_PLUGIN_TOP_LEVEL)}")
+
+    manifest, load_errors = _load_json(_hook_plugin_manifest(root))
+    errors += load_errors
+    if manifest is not None:
+        for key in ("hooks", "mcpServers", *COMPONENT_KEYS, "skills", "dependencies"):
+            if key in manifest:
+                errors.append(f"{_rel(root, _hook_plugin_manifest(root))}: must not declare {key!r}")
+
+    entries, load_errors = _marketplace_entries(root)
+    errors += load_errors
+    for entry in entries:
+        if entry.get("name") == HOOK_PLUGIN and "hooks" in entry:
+            errors.append(f".claude-plugin/marketplace.json: plugin {HOOK_PLUGIN!r} must not declare \"hooks\" inline")
+
+    hooks_files = sorted(p for p in plugin_dir.rglob("hooks.json"))
+    expected = plugin_dir / "hooks" / "hooks.json"
+    for path in hooks_files:
+        if path != expected:
+            errors.append(f"{_rel(root, path)}: the only hooks.json allowed is plugins/{HOOK_PLUGIN}/hooks/hooks.json")
+    if not expected.exists():
+        return errors + [f"{_rel(root, expected)}: missing"]
+
+    data, load_errors = _load_json(expected)
+    errors += load_errors
+    if data is None:
+        return errors
+    found, shape_errors = _hook_commands(data)
+    errors += [f"{_rel(root, expected)}: {e}" for e in shape_errors]
+    for event, hooks in found.items():
+        if event not in HOOK_PLUGIN_EVENTS:
+            errors.append(f"{_rel(root, expected)}: event {event!r} is not allowed (allowed: {sorted(HOOK_PLUGIN_EVENTS)})")
+        for hook in hooks:
+            if hook.get("type") != "command":
+                errors.append(f"{_rel(root, expected)}: {event}: only 'command' hooks are allowed, got {hook.get('type')!r}")
+                continue
+            match = HOOK_COMMAND_RE.match(str(hook.get("command", "")))
+            if not match or match.group("script") not in HOOK_PLUGIN_SCRIPTS:
+                errors.append(
+                    f"{_rel(root, expected)}: {event}: command {hook.get('command')!r} must run exactly one of "
+                    f"{sorted(HOOK_PLUGIN_SCRIPTS)}"
+                )
     return errors
 
 
@@ -320,7 +419,8 @@ def check_plugin_allowlist(root: Path) -> list[str]:
 
 
 def check_versions(root: Path) -> list[str]:
-    """Both plugin.json versions and marketplace metadata.version are identical strict semver."""
+    """Every plugin.json version (k2 Claude + Codex, k2-memory-hooks Claude) and marketplace
+    metadata.version are identical strict semver."""
     errors: list[str] = []
     versions: dict[str, object] = {}
 
@@ -329,7 +429,7 @@ def check_versions(root: Path) -> list[str]:
     if market is not None:
         versions[".claude-plugin/marketplace.json metadata.version"] = (market.get("metadata") or {}).get("version")
 
-    for manifest in (_claude_manifest(root), _codex_manifest(root)):
+    for manifest in (_claude_manifest(root), _codex_manifest(root), _hook_plugin_manifest(root)):
         data, load_errors = _load_json(manifest)
         errors += load_errors
         if data is not None:
@@ -438,6 +538,7 @@ def check_denylist(root: Path) -> list[str]:
 ALL_CHECKS = (
     check_no_mcp_servers,
     check_no_hooks,
+    check_hook_plugin_scope,
     check_skills_only,
     check_no_symlinks,
     check_plugin_allowlist,
@@ -459,11 +560,35 @@ def test_repo_passes(check):
     assert errors == [], "\n".join(errors)
 
 
+# The staff-only strings that replace a bare plugin-name ban. Built at runtime
+# so this file never spells them out; the scan skips tests/ anyway.
+_HOOKS = "memory" + "-hooks"
+STAFF_HOOK_STRINGS = (
+    "plugins/" + _HOOKS,
+    "/" + _HOOKS + ":connect",
+    "memory." + "k2-tek.com" + "/api/" + "hooks",
+)
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.lower().encode("utf-8")).hexdigest()
+
+
 def test_denylist_is_seeded():
     entries = _read_hashed_denylist(_policy_dir(REPO_ROOT) / "denylist.sha256")
     assert len(entries) == len(set(entries)) >= 15
-    # Deliberately absent so an opt-in plugin of that name is not blocked by accident.
-    assert hashlib.sha256(b"memory-hooks").hexdigest() not in {d for d, _ in entries}
+    digests = {d for d, _ in entries}
+    # Deliberately absent so the opt-in plugin's own name is not blocked.
+    assert _sha(_HOOKS) not in digests
+    assert _sha(HOOK_PLUGIN) not in digests
+    # The staff-specific strings that replace it are present, with their lengths.
+    for text in STAFF_HOOK_STRINGS:
+        assert (_sha(text), len(text)) in entries, f"denylist is missing a staff hook string of length {len(text)}"
+
+
+def test_hook_plugin_name_does_not_contain_a_staff_string():
+    path = "plugins/" + HOOK_PLUGIN
+    assert not any(text in path for text in STAFF_HOOK_STRINGS)
 
 
 def test_denylist_file_has_no_plain_text_entries():
@@ -484,8 +609,14 @@ def _with_test_marker(root: Path) -> Path:
     return root
 
 
-def test_allowlist_is_seeded_with_primary_plugin():
-    assert _read_list(_policy_dir(REPO_ROOT) / "allowed_plugins.txt") == [PRIMARY_PLUGIN]
+def test_allowlist_is_exactly_the_primary_and_hooks_plugins():
+    assert set(_read_list(_policy_dir(REPO_ROOT) / "allowed_plugins.txt")) == {PRIMARY_PLUGIN, HOOK_PLUGIN}
+    names = {e.get("name") for e in _marketplace_entries(REPO_ROOT)[0]}
+    assert names == {PRIMARY_PLUGIN, HOOK_PLUGIN}
+
+
+def test_hook_permitted_plugins_is_exactly_the_hooks_plugin():
+    assert HOOK_PERMITTED_PLUGINS == {HOOK_PLUGIN}
 
 
 def test_primary_plugin_is_never_hook_permitted():
@@ -635,7 +766,7 @@ def test_check_no_symlinks_rejects_symlink_under_tests(tmp_path):
     assert check_no_symlinks(root)
 
 
-def test_check_plugin_allowlist_rejects_second_marketplace_plugin(tmp_path):
+def test_check_plugin_allowlist_rejects_third_marketplace_plugin(tmp_path):
     root = _copy_repo(tmp_path)
     (root / "plugins" / "extra").mkdir()
     _edit_json(
@@ -729,3 +860,146 @@ def test_check_denylist_allows_opt_in_hooks_plugin_name(tmp_path):
     root = _copy_repo(tmp_path)
     (root / "notes.txt").write_text("k2-memory-hooks\n")
     assert check_denylist(root) == []
+
+
+# --------------------------------------------------------------------------
+# Negative tests: the k2-memory-hooks carve-out stays narrow
+# --------------------------------------------------------------------------
+
+
+def _hook_plugin_hooks_json(root: Path) -> Path:
+    return root / "plugins" / HOOK_PLUGIN / "hooks" / "hooks.json"
+
+
+def test_primary_plugin_still_rejects_hooks_json_with_the_carve_out(tmp_path):
+    root = _copy_repo(tmp_path)
+    hooks = root / "plugins" / PRIMARY_PLUGIN / "hooks"
+    hooks.mkdir()
+    (hooks / "hooks.json").write_text('{"hooks": {}}\n')
+    errors = check_no_hooks(root)
+    assert errors and all(f"plugins/{PRIMARY_PLUGIN}/" in e for e in errors)
+
+
+def test_primary_plugin_still_rejects_hooks_key_in_its_marketplace_entry(tmp_path):
+    root = _copy_repo(tmp_path)
+    _edit_json(_marketplace_path(root), lambda d: d["plugins"][0].__setitem__("hooks", "./hooks/hooks.json"))
+    assert check_no_hooks(root)
+
+
+def test_check_plugin_allowlist_rejects_third_plugin_even_when_on_disk(tmp_path):
+    root = _copy_repo(tmp_path)
+    (root / "plugins" / "third").mkdir()
+    _edit_json(
+        _marketplace_path(root),
+        lambda d: d["plugins"].append({"name": "third", "source": "./plugins/third", "description": "x"}),
+    )
+    assert check_plugin_allowlist(root)
+
+
+def test_check_plugin_allowlist_rejects_dropping_the_hooks_plugin(tmp_path):
+    root = _copy_repo(tmp_path)
+    _edit_json(_marketplace_path(root), lambda d: d.__setitem__("plugins", d["plugins"][:1]))
+    assert check_plugin_allowlist(root)
+
+
+@pytest.mark.parametrize("index", range(len(STAFF_HOOK_STRINGS)))
+def test_check_denylist_rejects_staff_hook_strings(tmp_path, index):
+    root = _copy_repo(tmp_path)
+    (root / "notes.md").write_text(f"see {STAFF_HOOK_STRINGS[index]} for details\n")
+    errors = check_denylist(root)
+    assert errors
+    assert all(STAFF_HOOK_STRINGS[index] not in e for e in errors)
+
+
+def test_check_denylist_rejects_staff_hook_string_inside_the_hooks_plugin(tmp_path):
+    root = _copy_repo(tmp_path)
+    readme = root / "plugins" / HOOK_PLUGIN / "README.md"
+    readme.write_text(readme.read_text() + "\nRun " + STAFF_HOOK_STRINGS[1] + " first.\n")
+    assert check_denylist(root)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/pre_commit_scan.py" --hook',
+        'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/lib/hook_common.py" forward /api/x',
+        'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/heartbeat.py" && curl example.invalid',
+        "bash -c 'python3 heartbeat.py'",
+    ],
+    ids=["other-script", "forwarder", "chained", "shell"],
+)
+def test_check_hook_plugin_scope_rejects_other_commands(tmp_path, command):
+    root = _copy_repo(tmp_path)
+    _edit_json(
+        _hook_plugin_hooks_json(root),
+        lambda d: d["hooks"]["Stop"][0]["hooks"][0].__setitem__("command", command),
+    )
+    assert check_hook_plugin_scope(root)
+
+
+def test_check_hook_plugin_scope_rejects_other_events(tmp_path):
+    root = _copy_repo(tmp_path)
+    hook = {"type": "command", "command": 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/heartbeat.py"'}
+    _edit_json(_hook_plugin_hooks_json(root), lambda d: d["hooks"].__setitem__("SessionStart", [{"hooks": [hook]}]))
+    assert check_hook_plugin_scope(root)
+
+
+def test_check_hook_plugin_scope_rejects_non_command_hooks(tmp_path):
+    root = _copy_repo(tmp_path)
+    _edit_json(
+        _hook_plugin_hooks_json(root),
+        lambda d: d["hooks"]["Stop"][0]["hooks"].append({"type": "http", "url": "https://example.invalid/x"}),
+    )
+    assert check_hook_plugin_scope(root)
+
+
+@pytest.mark.parametrize("key", ["hooks", "mcpServers", "commands", "agents", "skills", "dependencies"])
+def test_check_hook_plugin_scope_rejects_manifest_keys(tmp_path, key):
+    root = _copy_repo(tmp_path)
+    _edit_json(_hook_plugin_manifest(root), lambda d: d.__setitem__(key, {}))
+    assert check_hook_plugin_scope(root)
+
+
+def test_check_hook_plugin_scope_rejects_inline_marketplace_hooks(tmp_path):
+    root = _copy_repo(tmp_path)
+
+    def mutate(d):
+        entry = next(e for e in d["plugins"] if e["name"] == HOOK_PLUGIN)
+        entry["hooks"] = {"SessionStart": []}
+
+    _edit_json(_marketplace_path(root), mutate)
+    assert check_hook_plugin_scope(root)
+
+
+@pytest.mark.parametrize("extra", [".codex-plugin/plugin.json", "commands/x.md", "skills/x/SKILL.md", ".mcp.json"])
+def test_check_hook_plugin_scope_rejects_extra_components(tmp_path, extra):
+    root = _copy_repo(tmp_path)
+    path = root / "plugins" / HOOK_PLUGIN / extra
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n")
+    assert check_hook_plugin_scope(root)
+
+
+def test_check_hook_plugin_scope_rejects_a_second_hooks_json(tmp_path):
+    root = _copy_repo(tmp_path)
+    (root / "plugins" / HOOK_PLUGIN / "hooks" / "lib" / "hooks.json").write_text('{"hooks": {}}\n')
+    assert check_hook_plugin_scope(root)
+
+
+def test_check_versions_rejects_hook_plugin_version_mismatch(tmp_path):
+    root = _copy_repo(tmp_path)
+    _edit_json(_hook_plugin_manifest(root), lambda d: d.__setitem__("version", "9.9.9"))
+    assert check_versions(root)
+
+
+def test_check_no_mcp_servers_applies_to_the_hook_plugin(tmp_path):
+    root = _copy_repo(tmp_path)
+    _edit_json(_hook_plugin_manifest(root), lambda d: d.__setitem__("mcpServers", {}))
+    assert check_no_mcp_servers(root)
+
+
+def test_check_no_secrets_applies_to_the_hook_plugin(tmp_path):
+    root = _copy_repo(tmp_path)
+    lib = root / "plugins" / HOOK_PLUGIN / "hooks" / "lib" / "hook_common.py"
+    lib.write_text(lib.read_text() + "\nTOKEN_ENV = 'MEMORY_HOOK_" + "TOKEN'\n")
+    assert check_no_secrets(root)

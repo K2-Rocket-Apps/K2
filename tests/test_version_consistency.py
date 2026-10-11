@@ -359,3 +359,32 @@ def test_readme_states_what_the_package_does_not_install():
     low = README.lower()
     for phrase in ("no mcp server", "no hooks", "no background jobs", "changes no git"):
         assert phrase in low
+
+
+# --------------------------------------------------------------------------
+# The opt-in hooks plugin rides the same version
+# --------------------------------------------------------------------------
+
+
+def test_check_holds_the_hook_plugin_to_the_same_version():
+    assert check("v0.4.0", _market("0.4.0"), _plugin("0.4.0"), _plugin("0.4.0"), _plugin("0.4.0")) == []
+    assert check("v0.4.0", _market("0.4.0"), _plugin("0.4.0"), _plugin("0.4.0"), _plugin("0.3.0"))
+
+
+def test_hook_plugin_content_change_requires_a_bump():
+    path = "plugins/k2-memory-hooks/hooks/heartbeat.py"
+    assert requires_version_bump([path], "0.4.0", "0.4.0")
+    assert requires_version_bump([path], "0.4.0", "0.4.1") == []
+
+
+def test_release_gate_reads_the_real_hook_plugin_manifest(tmp_path):
+    root = tmp_path / "repo"
+    for rel in (vc.MARKETPLACE_JSON, vc.CLAUDE_PLUGIN_JSON, vc.CODEX_PLUGIN_JSON, vc.HOOK_PLUGIN_JSON, vc.CHANGELOG):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(REPO_ROOT / rel, root / rel)
+    version = json.loads((root / vc.MARKETPLACE_JSON).read_text())["metadata"]["version"]
+    assert vc.release_errors(root, f"v{version}") == []
+    data = json.loads((root / vc.HOOK_PLUGIN_JSON).read_text())
+    data["version"] = "9.9.9"
+    (root / vc.HOOK_PLUGIN_JSON).write_text(json.dumps(data))
+    assert vc.release_errors(root, f"v{version}")

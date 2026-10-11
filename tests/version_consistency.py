@@ -3,13 +3,14 @@
 Two checks, both runnable from CI:
 
 * Release mode (`--tag vX.Y.Z`): the pushed tag must be exactly `v` + the
-  version that the marketplace metadata, the Claude manifest and the Codex
-  manifest all declare, and CHANGELOG.md must carry a `## vX.Y.Z` section.
+  version that the marketplace metadata, the k2 Claude and Codex manifests
+  and the k2-memory-hooks manifest all declare, and CHANGELOG.md must carry a `## vX.Y.Z` section.
   `.github/workflows/release.yml` runs this before anything is built, so a
   mismatched tag fails the run and no Release is created.
 
 * PR mode (`--base <ref> [--head <ref>]`): a change to anything under
-  `plugins/k2/` must come with a version increase. Installed copies are
+  `plugins/k2/` or `plugins/k2-memory-hooks/` must come with a version
+  increase. Installed copies are
   cached by version, so shipping new content under an old version would
   leave existing installs silently stale. `.github/workflows/validate.yml`
   runs this as the `version-bump` job.
@@ -38,6 +39,13 @@ PLUGIN_PREFIX = f"plugins/{PLUGIN}/"
 MARKETPLACE_JSON = ".claude-plugin/marketplace.json"
 CLAUDE_PLUGIN_JSON = f"plugins/{PLUGIN}/.claude-plugin/plugin.json"
 CODEX_PLUGIN_JSON = f"plugins/{PLUGIN}/.codex-plugin/plugin.json"
+
+# The opt-in hooks plugin ships in the same marketplace at the same version.
+# Its installs are cached by version too, so its content changes need a bump.
+HOOK_PLUGIN = "k2-memory-hooks"
+HOOK_PLUGIN_PREFIX = f"plugins/{HOOK_PLUGIN}/"
+HOOK_PLUGIN_JSON = f"plugins/{HOOK_PLUGIN}/.claude-plugin/plugin.json"
+VERSIONED_PREFIXES = (PLUGIN_PREFIX, HOOK_PLUGIN_PREFIX)
 CHANGELOG = "CHANGELOG.md"
 
 SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
@@ -62,15 +70,19 @@ def check(
     marketplace_json: Mapping,
     claude_plugin_json: Mapping,
     codex_plugin_json: Mapping,
+    hook_plugin_json: Mapping | None = None,
 ) -> list[str]:
-    """Errors when the three manifest versions differ, are not strict semver,
-    or when `tag` is not exactly `'v' + version`. An empty list means the tag
-    may be released."""
+    """Errors when the manifest versions differ, are not strict semver, or
+    when `tag` is not exactly `'v' + version`. An empty list means the tag
+    may be released. `hook_plugin_json`, when given, is held to the same
+    version."""
     versions = {
         f"{MARKETPLACE_JSON} metadata.version": _version_of(marketplace_json, "metadata", "version"),
         f"{CLAUDE_PLUGIN_JSON} version": _version_of(claude_plugin_json, "version"),
         f"{CODEX_PLUGIN_JSON} version": _version_of(codex_plugin_json, "version"),
     }
+    if hook_plugin_json is not None:
+        versions[f"{HOOK_PLUGIN_JSON} version"] = _version_of(hook_plugin_json, "version")
 
     errors: list[str] = []
     for where, version in versions.items():
@@ -101,10 +113,10 @@ def parse_semver(version: object) -> tuple[int, int, int] | None:
 def requires_version_bump(
     changed_files: list[str], base_version: str | None, head_version: str | None
 ) -> list[str]:
-    """Errors when a file under plugins/k2/ changed but the version did not
-    increase. `base_version` None means the plugin did not exist at the base
-    ref, so there is nothing to bump against."""
-    content_changes = sorted(f for f in changed_files if f.startswith(PLUGIN_PREFIX))
+    """Errors when a file under plugins/k2/ or plugins/k2-memory-hooks/
+    changed but the version did not increase. `base_version` None means the
+    plugin did not exist at the base ref, so there is nothing to bump against."""
+    content_changes = sorted(f for f in changed_files if f.startswith(VERSIONED_PREFIXES))
     if not content_changes or base_version is None:
         return []
 
@@ -123,7 +135,7 @@ def requires_version_bump(
     return [
         f"{shown} changed but the k2 version did not increase "
         f"(base {base_version}, head {head_version}). Bump the version in "
-        f"{MARKETPLACE_JSON}, {CLAUDE_PLUGIN_JSON} and {CODEX_PLUGIN_JSON}, "
+        f"{MARKETPLACE_JSON}, {CLAUDE_PLUGIN_JSON}, {CODEX_PLUGIN_JSON} and {HOOK_PLUGIN_JSON}, "
         f"and add a CHANGELOG.md entry."
     ]
 
@@ -174,11 +186,13 @@ def _version_at(root: Path, ref: str) -> str | None:
 
 
 def release_errors(root: Path, tag: str) -> list[str]:
+    hook_manifest = root / HOOK_PLUGIN_JSON
     errors = check(
         tag,
         _load(root / MARKETPLACE_JSON),
         _load(root / CLAUDE_PLUGIN_JSON),
         _load(root / CODEX_PLUGIN_JSON),
+        _load(hook_manifest) if hook_manifest.exists() else None,
     )
     changelog = root / CHANGELOG
     text = changelog.read_text(encoding="utf-8") if changelog.exists() else ""
@@ -216,7 +230,7 @@ def main(argv: list[str] | None = None, root: Path = REPO_ROOT) -> int:
         ok = f"OK: tag {args.tag} matches every manifest version and has a changelog entry."
     else:
         errors = pr_errors(root, args.base, args.head)
-        ok = "OK: no plugins/k2/ change without a version increase."
+        ok = "OK: no plugin content change without a version increase."
 
     if errors:
         for error in errors:

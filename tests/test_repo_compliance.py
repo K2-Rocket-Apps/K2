@@ -34,6 +34,11 @@ def _skill_dirs(plugin_dir: Path) -> list[Path]:
 
 
 _PLUGIN_DIRS = _plugin_dirs(REPO_ROOT)
+# Plugins that ship for Claude Code only, with no Codex manifest (the opt-in
+# hooks plugin: Codex hook wiring is out of scope). Every other plugin must
+# carry both manifests.
+CLAUDE_ONLY_PLUGINS = frozenset({"k2-memory-hooks"})
+_DUAL_PLUGIN_DIRS = [d for d in _PLUGIN_DIRS if d.name not in CLAUDE_ONLY_PLUGINS]
 _SKILL_PARAMS = [(p, s.name) for p in _PLUGIN_DIRS for s in _skill_dirs(p)]
 _SKILL_IDS = [f"{p.name}/{name}" for p, name in _SKILL_PARAMS]
 
@@ -53,13 +58,13 @@ def test_claude_plugin_json_is_well_formed(plugin_dir):
     assert errors == [], "\n".join(errors)
 
 
-@pytest.mark.parametrize("plugin_dir", _PLUGIN_DIRS, ids=lambda d: d.name)
+@pytest.mark.parametrize("plugin_dir", _DUAL_PLUGIN_DIRS, ids=lambda d: d.name)
 def test_codex_plugin_json_is_well_formed(plugin_dir):
     errors = validate_plugin_json(plugin_dir / ".codex-plugin" / "plugin.json")
     assert errors == [], "\n".join(errors)
 
 
-@pytest.mark.parametrize("plugin_dir", _PLUGIN_DIRS, ids=lambda d: d.name)
+@pytest.mark.parametrize("plugin_dir", _DUAL_PLUGIN_DIRS, ids=lambda d: d.name)
 def test_both_manifests_agree_on_identity(plugin_dir):
     import json
 
@@ -68,6 +73,20 @@ def test_both_manifests_agree_on_identity(plugin_dir):
     for key in ("name", "version", "description"):
         assert claude.get(key) == codex.get(key), f"{plugin_dir.name}: '{key}' differs between the two manifests"
     assert claude["name"] == plugin_dir.name
+
+
+@pytest.mark.parametrize("name", sorted(CLAUDE_ONLY_PLUGINS))
+def test_claude_only_plugin_has_no_codex_manifest_and_matching_name(name):
+    import json
+
+    plugin_dir = REPO_ROOT / "plugins" / name
+    assert not (plugin_dir / ".codex-plugin").exists()
+    claude = json.loads((plugin_dir / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    assert claude["name"] == name
+
+
+def test_primary_plugin_ships_both_manifests():
+    assert (REPO_ROOT / "plugins" / "k2") in _DUAL_PLUGIN_DIRS
 
 
 def test_plugin_dirs_are_sorted_for_determinism():
