@@ -6,13 +6,18 @@
   },
   "metadata": {
     "description": "The public K2 plugin marketplace for Claude Code and Codex.",
-    "version": "0.3.0"
+    "version": "0.4.0"
   },
   "plugins": [
     {
       "name": "k2",
       "source": "./plugins/k2",
       "description": "Connect your coding agent to your organization's K2 MCP Gateway and Memory."
+    },
+    {
+      "name": "k2-memory-hooks",
+      "source": "./plugins/k2-memory-hooks",
+      "description": "Opt-in hooks that send session heartbeats and redacted test-failure friction to K2 Memory through k2-agent. Not enabled by the k2 plugin."
     }
   ]
 }

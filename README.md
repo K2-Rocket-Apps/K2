@@ -7,7 +7,7 @@ This repository is public and can be cloned anonymously. It contains no secrets,
 ## Install
 
 Every command below uses only the public repository URL; none of them needs a token or a secret.
-The package installs **no MCP server, no hooks and no background jobs**, and **changes no git
+The `k2` plugin installs **no MCP server, no hooks and no background jobs**, and **changes no git
 settings**. It ships skills only.
 
 ### Claude Code
@@ -85,6 +85,14 @@ sha256sum -c SHA256SUMS
 Installing the plugin connects nothing on its own. Ask your agent to run the **k2-connect** skill
 (for example, "Connect me to my K2 gateway."). It sets up your gateway URL through `k2-agent`, and
 sign-in happens in your browser.
+
+### Optional: k2-memory-hooks
+
+This marketplace also lists `k2-memory-hooks`, a separate Claude Code plugin that sends session
+heartbeats and redacted test-failure friction to your organization's K2 Memory through `k2-agent`.
+It is **opt-in**: installing `k2` never installs or enables it, and nothing it sends is accepted until
+your organization's admin and you have both consented. See
+[plugins/k2-memory-hooks/README.md](plugins/k2-memory-hooks/README.md) before installing it.
 
 Release history is in [CHANGELOG.md](CHANGELOG.md).
 

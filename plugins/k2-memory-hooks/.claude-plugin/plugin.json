@@ -1,0 +1,9 @@
+{
+  "name": "k2-memory-hooks",
+  "version": "0.4.0",
+  "description": "Opt-in Claude Code hooks that send session heartbeats and redacted test-failure friction to your organization's K2 Memory, through k2-agent.",
+  "author": {
+    "name": "K2-Rocket-Apps"
+  },
+  "license": "Apache-2.0"
+}
