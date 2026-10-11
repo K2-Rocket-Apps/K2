@@ -27,7 +27,11 @@ These apply at every step. If a step below seems to conflict with one of them, t
 - **Never write a credential into a client or shell file yourself.** That covers
   `~/.claude/settings.json`, `~/.claude.json`, `~/.codex/config.toml`, any shell profile or rc
   file, and any exported variable. `k2-agent` keeps its credentials in its own store and wires
-  the clients itself, so nothing here needs a file edit from you.
+  Claude Code and Codex itself, so nothing here needs a file edit from you.
+- **Only ever wire Claude Code and Codex.** Pass `--client claude-code,codex` to every
+  `k2-agent connect` and `k2-agent configure` you run. Without it the agent also wires Cursor if
+  it finds it, and Cursor's setup saves a gateway access key into a shell profile (or, on
+  Windows, a user environment variable). This skill must never cause that.
 - **Never change machine-wide git settings** (no global git config edits) as part of connecting.
 - **Never pipe a downloaded script into a shell or into PowerShell.** Download it to a file, let
   the user read it, then run the file.
@@ -53,7 +57,8 @@ endpoint they expect before going on.
 ## Step 2: central-host guard
 
 Until per-organisation routing on the central hosts (T1) is live in production, the bare central
-host does not serve your organisation. Compare the lower-cased host of `<base>` with this table:
+host does not serve your organisation. Take the host name of `<base>`, drop any port, remove a
+trailing dot, lower-case it, and compare the result with this table:
 
 | Central host (refuse exactly this host) |
 |---|
@@ -97,12 +102,13 @@ Check whether `k2-agent` is on the PATH and whether `k2-agent help` lists a `k2-
 command. If it does, run:
 
 ```bash
-k2-agent connect --gateway '<base>'
+k2-agent connect --gateway '<base>' --client claude-code,codex
 ```
 
 `k2-agent connect` fetches the same bootstrap document, signs in with the device flow, enrols
-this device, configures every detected client (Claude Code, Codex, Cursor), and checks that the
-gateway accepts the result. It applies the same https rule as Step 1.
+this device, configures the clients named by `--client` (those of the two that are installed),
+and checks that the gateway accepts the result. It applies the same https rule as Step 1. Keep
+`--client claude-code,codex` exactly as shown (see Hard rules).
 
 While it runs, it prints a verification URL and a short user code. Relay **only** those two
 values to the user, ask them to open the URL in their browser and confirm the code, and wait.
@@ -110,7 +116,23 @@ Then go to Step 6.
 
 ### 4b. The agent is missing, or has no `connect`
 
-Have the user download the installer from their gateway, read it, and only then run it.
+**First check for Cursor.** The installer signs in by itself, and its sign-in wires every client
+it detects, with no way to limit it to Claude Code and Codex. It detects Cursor by a `.cursor`
+folder in the home directory or a `cursor` command on the PATH. Check both:
+
+```bash
+ls -d ~/.cursor; command -v cursor
+```
+
+On Windows PowerShell: `Test-Path "$HOME\.cursor"; Get-Command cursor -ErrorAction SilentlyContinue`.
+
+If either finds Cursor, **do not run the installer.** Explain that it would also wire Cursor,
+which saves a gateway access key into a shell profile or user environment variable. Send the user
+to `<base>/install` as in Step 5, and stop. Once `k2-agent` is installed with `connect`, Step 4a
+applies.
+
+If Cursor is not present, have the user download the installer from their gateway, read it, and
+only then run it.
 
 macOS and Linux:
 
@@ -129,24 +151,28 @@ powershell -NoProfile -File .\k2-agent-install.ps1
 ```
 
 The installer serves a script with this gateway's URL already in it. It installs `k2-agent`,
-puts it on the PATH for new terminals, and then signs in: it runs `k2-agent connect` itself when
-the installed agent has it, relaying the same URL and user code as in 4a.
+adds its own folder to the PATH in your shell profile (no credential is written there), and then
+signs in: it runs `k2-agent connect` itself when the installed agent has it, relaying the same
+URL and user code as in 4a. With Cursor absent (checked above), that wires only Claude Code and
+Codex.
 
 If the installed agent has no `connect` (a self-hosted gateway can pin an older release), the
 installer runs `k2-agent auth login` instead. When that finishes, run:
 
 ```bash
-k2-agent configure
+k2-agent configure --client claude-code,codex
 ```
 
-to wire the installed clients. If sign-in was interrupted, run the downloaded installer file
-again rather than retrying by hand. If you do need to run `k2-agent auth login` by hand, give it
-the gateway URL and the public `oauth_client_id` from Step 3 for that one command only (neither
+to wire Claude Code and Codex. If the agent rejects `--client`, stop: do not run `k2-agent
+configure` without it. Send the user to `<base>/install` instead.
+
+If sign-in was interrupted, run the downloaded installer file again rather than retrying by
+hand. If you do need to run `k2-agent auth login` by hand, give it the gateway URL and the public `oauth_client_id` from Step 3 for that one command only (neither
 value is a secret, and neither is written to a profile):
 
 ```bash
 K2_GATEWAY_URL='<base>' K2_OAUTH_CLIENT_ID='<oauth_client_id>' k2-agent auth login
-k2-agent configure
+k2-agent configure --client claude-code,codex
 ```
 
 As in 4a, relay only the verification URL and user code. Then go to Step 6.
@@ -162,7 +188,7 @@ Then send the user to their gateway's setup page:
 ```
 
 That page signs them in through the browser and shows the client setup for their organisation.
-In this branch you write **no** configuration of any kind, and you stop here; an administrator can
+On this path you write **no** configuration of any kind, and you stop here; an administrator can
 enable the agent path later, after which this skill can be run again.
 
 ## Step 6: verify

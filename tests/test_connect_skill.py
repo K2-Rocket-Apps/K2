@@ -115,3 +115,49 @@ def test_skill_refuses_plain_http():
     assert "http://localhost" in text
     assert "http://127.0.0.1" in text
     assert "http://example.com" in text
+
+
+AGENT_WIRING_COMMAND = re.compile(r"^\s*(?:\S+=\S+\s+)*k2-agent\s+(connect|configure)\b.*$")
+
+
+def _command_lines(text: str) -> list[str]:
+    """Lines inside fenced code blocks: the commands the skill tells you to run."""
+    lines, in_block = [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            in_block = not in_block
+            continue
+        if in_block:
+            lines.append(line)
+    return lines
+
+
+def test_every_agent_wiring_command_is_scoped_to_claude_code_and_codex():
+    # Wiring Cursor makes k2-agent persist a gateway access key into a shell
+    # profile or a user environment variable, so every connect/configure the
+    # skill prescribes must name only the two in-scope clients.
+    commands = [l for l in _command_lines(_text()) if AGENT_WIRING_COMMAND.match(l)]
+    assert commands, "no k2-agent connect/configure command found in a code block"
+    for command in commands:
+        assert "--client claude-code,codex" in command, f"unscoped agent command: {command.strip()!r}"
+
+
+def test_skill_never_claims_to_wire_cursor():
+    text = _text()
+    assert re.search(r"configures? every detected client", text, flags=re.IGNORECASE) is None
+    assert "(Claude Code, Codex, Cursor)" not in text
+
+
+def test_skill_checks_for_cursor_before_running_the_installer():
+    text = _text()
+    installer = text.index("curl -fsSLo k2-agent-install.sh")
+    cursor_check = text.index("ls -d ~/.cursor; command -v cursor")
+    assert cursor_check < installer
+    assert "do not run the installer" in text
+
+
+def test_central_host_comparison_normalises_port_and_trailing_dot():
+    text = _text()
+    guard = text[text.index(GUARD_START):text.index(GUARD_END)]
+    assert "drop any port" in guard
+    assert "trailing dot" in guard
