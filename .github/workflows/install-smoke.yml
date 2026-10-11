@@ -1,0 +1,97 @@
+name: install-smoke
+
+# Anonymous clean-machine install check. A bare Debian + Node container with
+# git and nothing else (no GitHub CLI, no token, no secret) installs the k2
+# plugin into Claude Code and Codex straight from the public repository, first
+# from the default branch and then pinned to a release tag (the published
+# tag on a release event, otherwise the latest vX.Y.Z tag). See
+# scripts/install-smoke.sh for every assertion.
+#
+# No pull_request trigger and no secrets: forks never run this, and the job
+# token has no permissions at all. The source is fetched anonymously with git
+# instead of a checkout action, so nothing here needs the token.
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+  schedule:
+    # Weekly, Monday 06:17 UTC.
+    - cron: "17 6 * * 1"
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Must equal the versions in validate.yml (pinned by
+  # tests/test_install_smoke.py). Bump both together.
+  CLAUDE_CODE_VERSION: "2.1.289"
+  CODEX_VERSION: "0.160.1"
+  SMOKE_REPO: K2-Rocket-Apps/k2
+
+jobs:
+  install-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: node:22-bookworm-slim
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install git (and the CA bundle it needs for HTTPS)
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates
+          git --version
+
+      - name: Fetch this commit anonymously
+        env:
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          src="$(mktemp -d)"
+          git -C "$src" init -q
+          git -C "$src" fetch -q --depth 1 "$SERVER_URL/$REPOSITORY" "$SHA"
+          git -C "$src" checkout -q FETCH_HEAD
+          echo "SMOKE_SRC=$src" >> "$GITHUB_ENV"
+
+      - name: Install the pinned Claude Code and Codex CLIs
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" "@openai/codex@${CODEX_VERSION}"
+
+      - name: GitHub CLI is absent
+        run: |
+          if command -v gh; then echo "gh must not be installed here"; exit 1; fi
+          echo "gh absent"
+
+      - name: Smoke test, default branch
+        run: bash "$SMOKE_SRC/scripts/install-smoke.sh" "$SMOKE_REPO"
+
+      - name: Resolve the release tag to pin
+        env:
+          # Set only on a release event; empty for dispatch and schedule runs.
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "${RELEASE_TAG:-}" ]; then
+            # A release run pins the tag that was just published, even when it
+            # is a backport or a prerelease rather than the highest tag.
+            tag="$RELEASE_TAG"
+            echo "release tag: $tag"
+          else
+            tag="$(git ls-remote --tags --refs "https://github.com/$SMOKE_REPO" 'v*' \
+              | sed 's#.*refs/tags/##' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V | tail -n 1)"
+            test -n "$tag" || { echo "no release tag found"; exit 1; }
+            echo "latest tag: $tag"
+          fi
+          echo "SMOKE_TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: Smoke test, pinned to the release tag
+        run: bash "$SMOKE_SRC/scripts/install-smoke.sh" "$SMOKE_REPO#$SMOKE_TAG"

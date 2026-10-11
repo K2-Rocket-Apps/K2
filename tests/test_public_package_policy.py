@@ -630,7 +630,7 @@ def test_hook_permitted_plugins_are_allow_listed():
 
 def test_scan_scope_includes_scripts_and_github_but_not_tests(tmp_path):
     root = _copy_repo(tmp_path)
-    (root / "scripts").mkdir()
+    (root / "scripts").mkdir(exist_ok=True)
     (root / "scripts" / "a.txt").write_text("x\n")
     scanned = {_rel(root, p) for p in iter_scanned_files(root)}
     assert "scripts/a.txt" in scanned
@@ -809,7 +809,7 @@ def test_check_no_secrets_rejects_secret_patterns(tmp_path, content):
 
 def test_check_machine_hygiene_rejects_global_git_config_in_script(tmp_path):
     root = _copy_repo(tmp_path)
-    (root / "scripts").mkdir()
+    (root / "scripts").mkdir(exist_ok=True)
     (root / "scripts" / "x.sh").write_text("#!/bin/sh\ngit config --global user.name x\n")
     assert check_machine_hygiene(root)
 
