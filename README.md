@@ -203,11 +203,12 @@ printed in a log, and never stored as a repository-wide secret.
    current one. Do not remove the old record yet. Wait until `dig +short TXT k2-tek.com` shows both.
 3. Replace the `MCP_REGISTRY_PRIVATE_KEY` secret of the `mcp-registry` environment with the new hex
    private key.
-4. Publish once with the new key (the next release, or a re-run of the `mcp-registry` job of the
-   latest release, which skips publishing a version that is already listed but still proves nothing
-   else changed). A failed login means the new TXT record is not visible yet: wait and retry.
-5. **Remove** the old TXT record, then securely delete every copy of the old and new private keys
-   outside the environment secret.
+4. Keep both TXT records until the **next release** publishes a new version with the new key. Only a
+   real publish proves the new key works: a re-run of an already-listed version skips the sign-in
+   step, so it never uses the key. A failed login means the new TXT record is not visible yet: wait
+   and re-run the `mcp-registry` job.
+5. After that publish succeeds, **remove** the old TXT record, then securely delete every copy of the
+   old and new private keys outside the environment secret.
 
 If the key is ever exposed, do the same steps at once and remove the old record immediately after
 step 3.
