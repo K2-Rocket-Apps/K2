@@ -559,6 +559,14 @@ def test_friction_reads_tool_response_when_tool_output_is_absent(monkeypatch, ca
     assert AWS_KEY_ID not in payload["description"] and "***" in payload["description"]
 
 
+def test_friction_extracts_text_streams_from_a_structured_tool_response(monkeypatch, capsys, tmp_path):
+    response = {"stdout": "1 failed", "stderr": f"E {GITHUB_TOKEN}", "interrupted": False}
+    event = {"cwd": str(tmp_path / "repo"), "tool_input": {"command": "pytest"}, "tool_response": response}
+    description = _capture_friction(monkeypatch, capsys, event)["description"]
+    assert description == redact_and_truncate("1 failed\nE " + GITHUB_TOKEN)
+    assert "ghp_" not in description and "interrupted" not in description
+
+
 def test_friction_skips_without_cwd(monkeypatch, capsys):
     monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
     sent = []

@@ -322,7 +322,7 @@ def check_hook_plugin_scope(root: Path) -> list[str]:
             if hook.get("type") != "command":
                 errors.append(f"{_rel(root, expected)}: {event}: only 'command' hooks are allowed, got {hook.get('type')!r}")
                 continue
-            match = HOOK_COMMAND_RE.match(str(hook.get("command", "")))
+            match = HOOK_COMMAND_RE.fullmatch(str(hook.get("command", "")))
             if not match or match.group("script") not in HOOK_PLUGIN_SCRIPTS:
                 errors.append(
                     f"{_rel(root, expected)}: {event}: command {hook.get('command')!r} must run exactly one of "
@@ -925,8 +925,9 @@ def test_check_denylist_rejects_staff_hook_string_inside_the_hooks_plugin(tmp_pa
         'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/lib/hook_common.py" forward /api/x',
         'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/heartbeat.py" && curl example.invalid',
         "bash -c 'python3 heartbeat.py'",
+        'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/heartbeat.py"\n',
     ],
-    ids=["other-script", "forwarder", "chained", "shell"],
+    ids=["other-script", "forwarder", "chained", "shell", "trailing-newline"],
 )
 def test_check_hook_plugin_scope_rejects_other_commands(tmp_path, command):
     root = _copy_repo(tmp_path)

@@ -60,6 +60,8 @@ jobs:
           import json, os, pathlib
           config = pathlib.Path(os.environ["CLAUDE_CONFIG_DIR"])
           enabled = json.loads((config / "settings.json").read_text())["enabledPlugins"]
+          # The enabledPlugins equality is the authoritative isolation check; the hooks.json
+          # scan below is a secondary guard only.
           assert enabled == {"k2@k2": True}, enabled
           stray = sorted(str(p) for p in config.rglob("hooks.json"))
           assert stray == [], stray

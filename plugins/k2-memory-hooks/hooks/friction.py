@@ -27,6 +27,11 @@ def main() -> int:
             tool_input = {}
         # Claude Code names the field tool_response; tool_output and error are accepted too.
         tool_output = event.get("tool_output") or event.get("tool_response") or event.get("error") or ""
+        if isinstance(tool_output, dict):
+            # A structured response: keep only its text streams, not the whole mapping.
+            tool_output = "\n".join(
+                str(tool_output[key]) for key in ("stdout", "stderr") if tool_output.get(key)
+            )
         tool_name = event.get("tool_name", "Bash")
 
         repo = hook_common.derive_repo(cwd)
