@@ -1,0 +1,15 @@
+name: lint
+
+on:
+  push:
+    branches: [develop, qa, main]
+  pull_request:
+    branches: [develop, qa, main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    uses: K2-Rocket-Apps/ci-workflows/.github/workflows/lint.yml@v1
+    secrets: inherit
