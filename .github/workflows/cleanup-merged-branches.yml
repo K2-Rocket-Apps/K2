@@ -1,0 +1,61 @@
+name: cleanup-merged-branches
+
+# Manually started housekeeping: delete branches whose pull request was MERGED
+# and that have not moved since. A branch is deleted only when all of these hold:
+#   - a merged pull request in this repository has it as head, and the branch tip
+#     is still exactly that pull request's head commit (nothing added after merge);
+#   - no open pull request uses it as head;
+#   - it is not main, develop, qa, master or the repository's default branch.
+# Runs as a dry run unless dry_run is set to "false". Manual dispatch only.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be deleted without deleting (true/false)"
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: cleanup-merged-branches
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - name: Delete merged, unchanged branches
+        run: |
+          set -euo pipefail
+          default="$(gh api "repos/$REPO" --jq .default_branch)"
+          gh api --paginate "repos/$REPO/branches?per_page=100" \
+            --jq '.[] | "\(.name) \(.commit.sha)"' > branches.txt
+          gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" \
+            --jq '.[].head.ref' | sort -u > open.txt
+          gh api --paginate "repos/$REPO/pulls?state=closed&per_page=100" \
+            --jq ".[] | select(.merged_at != null and .head.repo.full_name == \"$REPO\") | \"\(.head.ref) \(.head.sha) \(.number)\"" > merged.txt
+          deleted=0; kept=0
+          while read -r name sha; do
+            case "$name" in main|develop|qa|master|"$default") continue ;; esac
+            if grep -qxF -- "$name" open.txt; then continue; fi
+            pr="$(awk -v n="$name" -v s="$sha" '$1==n && $2==s {print $3; exit}' merged.txt)"
+            if [ -z "$pr" ]; then kept=$((kept+1)); continue; fi
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "would delete $name (merged in #$pr)"
+            else
+              gh api -X DELETE "repos/$REPO/git/refs/heads/$name" >/dev/null
+              echo "deleted $name (merged in #$pr)"
+            fi
+            deleted=$((deleted+1))
+          done < branches.txt
+          echo "::notice::dry_run=$DRY_RUN matched=$deleted, other branches left untouched=$kept"
