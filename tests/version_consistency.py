@@ -3,10 +3,14 @@
 Two checks, both runnable from CI:
 
 * Release mode (`--tag vX.Y.Z`): the pushed tag must be exactly `v` + the
-  version that the marketplace metadata, the k2 Claude and Codex manifests
-  and the k2-memory-hooks manifest all declare, and CHANGELOG.md must carry a `## vX.Y.Z` section.
+  version that the marketplace metadata, the k2 Claude and Codex manifests,
+  the k2-memory-hooks manifest, the root `package.json` (the npm mirror) and
+  the root `server.json` (the MCP Registry listing) all declare, and
+  CHANGELOG.md must carry a `## vX.Y.Z` section.
   `.github/workflows/release.yml` runs this before anything is built, so a
-  mismatched tag fails the run and no Release is created.
+  mismatched tag fails the run and no Release is created, and
+  `.github/workflows/publish-npm.yml` runs it again before `npm publish`, and
+  `.github/workflows/publish-mcp-registry.yml` before `mcp-publisher publish`.
 
 * PR mode (`--base <ref> [--head <ref>]`): a change to anything under
   `plugins/k2/` or `plugins/k2-memory-hooks/` must come with a version
@@ -46,6 +50,13 @@ HOOK_PLUGIN = "k2-memory-hooks"
 HOOK_PLUGIN_PREFIX = f"plugins/{HOOK_PLUGIN}/"
 HOOK_PLUGIN_JSON = f"plugins/{HOOK_PLUGIN}/.claude-plugin/plugin.json"
 VERSIONED_PREFIXES = (PLUGIN_PREFIX, HOOK_PLUGIN_PREFIX)
+
+# The npm mirror of the marketplace (publish-npm.yml) is one more version
+# source: the package version must equal the tag and every manifest.
+PACKAGE_JSON = "package.json"
+# The MCP Registry listing (publish-mcp-registry.yml) is published from the
+# same tag, so its version is held to the same value.
+SERVER_JSON = "server.json"
 CHANGELOG = "CHANGELOG.md"
 
 SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
@@ -71,11 +82,13 @@ def check(
     claude_plugin_json: Mapping,
     codex_plugin_json: Mapping,
     hook_plugin_json: Mapping | None = None,
+    package_json: Mapping | None = None,
+    server_json: Mapping | None = None,
 ) -> list[str]:
     """Errors when the manifest versions differ, are not strict semver, or
     when `tag` is not exactly `'v' + version`. An empty list means the tag
-    may be released. `hook_plugin_json`, when given, is held to the same
-    version."""
+    may be released. `hook_plugin_json` and `package_json`, when given, are
+    held to the same version, and so is `server_json`."""
     versions = {
         f"{MARKETPLACE_JSON} metadata.version": _version_of(marketplace_json, "metadata", "version"),
         f"{CLAUDE_PLUGIN_JSON} version": _version_of(claude_plugin_json, "version"),
@@ -83,6 +96,10 @@ def check(
     }
     if hook_plugin_json is not None:
         versions[f"{HOOK_PLUGIN_JSON} version"] = _version_of(hook_plugin_json, "version")
+    if package_json is not None:
+        versions[f"{PACKAGE_JSON} version"] = _version_of(package_json, "version")
+    if server_json is not None:
+        versions[f"{SERVER_JSON} version"] = _version_of(server_json, "version")
 
     errors: list[str] = []
     for where, version in versions.items():
@@ -135,7 +152,8 @@ def requires_version_bump(
     return [
         f"{shown} changed but the k2 version did not increase "
         f"(base {base_version}, head {head_version}). Bump the version in "
-        f"{MARKETPLACE_JSON}, {CLAUDE_PLUGIN_JSON}, {CODEX_PLUGIN_JSON} and {HOOK_PLUGIN_JSON}, "
+        f"{MARKETPLACE_JSON}, {CLAUDE_PLUGIN_JSON}, {CODEX_PLUGIN_JSON}, {HOOK_PLUGIN_JSON}, "
+        f"{PACKAGE_JSON} and {SERVER_JSON}, "
         f"and add a CHANGELOG.md entry."
     ]
 
@@ -187,13 +205,25 @@ def _version_at(root: Path, ref: str) -> str | None:
 
 def release_errors(root: Path, tag: str) -> list[str]:
     hook_manifest = root / HOOK_PLUGIN_JSON
+    package = root / PACKAGE_JSON
+    server = root / SERVER_JSON
     errors = check(
         tag,
         _load(root / MARKETPLACE_JSON),
         _load(root / CLAUDE_PLUGIN_JSON),
         _load(root / CODEX_PLUGIN_JSON),
         _load(hook_manifest) if hook_manifest.exists() else None,
+        _load(package) if package.exists() else None,
+        _load(server) if server.exists() else None,
     )
+    if not package.exists():
+        # Fail closed: the npm mirror publishes from this tag, so its version
+        # source must exist and match.
+        errors.append(f"{PACKAGE_JSON}: missing (the npm mirror's version must equal the tag)")
+    if not server.exists():
+        # Fail closed for the same reason: the MCP Registry listing publishes
+        # from this tag.
+        errors.append(f"{SERVER_JSON}: missing (the MCP Registry listing's version must equal the tag)")
     changelog = root / CHANGELOG
     text = changelog.read_text(encoding="utf-8") if changelog.exists() else ""
     if changelog_section(text, tag) is None:
@@ -201,9 +231,32 @@ def release_errors(root: Path, tag: str) -> list[str]:
     return errors
 
 
+def _package_version_at(root: Path, ref: str, path: str = PACKAGE_JSON) -> str | None:
+    try:
+        return json.loads(_git(root, "show", f"{ref}:{path}")).get("version")
+    except subprocess.CalledProcessError:
+        return None
+
+
 def pr_errors(root: Path, base: str, head: str) -> list[str]:
     changed = [f for f in _git(root, "diff", "--name-only", f"{base}...{head}").splitlines() if f]
-    return requires_version_bump(changed, _version_at(root, base), _version_at(root, head))
+    head_version = _version_at(root, head)
+    errors = requires_version_bump(changed, _version_at(root, base), head_version)
+    # Catch a manifest bump without the matching package.json bump on the PR,
+    # not at tag time.
+    package_version = _package_version_at(root, head)
+    if package_version is not None and package_version != head_version:
+        errors.append(
+            f"{PACKAGE_JSON} version {package_version!r} differs from {CLAUDE_PLUGIN_JSON} "
+            f"version {head_version!r}; bump them together."
+        )
+    server_version = _package_version_at(root, head, SERVER_JSON)
+    if server_version is not None and server_version != head_version:
+        errors.append(
+            f"{SERVER_JSON} version {server_version!r} differs from {CLAUDE_PLUGIN_JSON} "
+            f"version {head_version!r}; bump them together."
+        )
+    return errors
 
 
 def main(argv: list[str] | None = None, root: Path = REPO_ROOT) -> int:
