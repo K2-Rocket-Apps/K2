@@ -13,6 +13,9 @@ permissions:
 jobs:
   promote:
     uses: K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-promote.yml@v1
+    with:
+      # K2 runs CI on GitHub-hosted runners only (README.md); the input defaults to an org runner.
+      runs-on: ubuntu-latest
     # Explicit, never `secrets: inherit`. PRs opened with GITHUB_TOKEN do not
     # trigger CI, so the PRs are opened with the release GitHub App.
     secrets:

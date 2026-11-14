@@ -53,5 +53,7 @@ jobs:
     # deployment branches are develop/qa/main only. Until that environment holds the secrets the
     # checks are posted with GITHUB_TOKEN: weaker (any workflow with checks: write can post
     # them). ci-workflows docs/apps/README.md.
-    # with:
-    #   hotfix-label: break-glass   # optional: hotfix/* PRs need this label
+    with:
+      # K2 runs CI on GitHub-hosted runners only (README.md); the input defaults to an org runner.
+      runs-on: ubuntu-latest
+      # hotfix-label: break-glass   # optional: hotfix/* PRs need this label

@@ -235,13 +235,26 @@ SDLC_CALLER_RE = re.compile(
 )
 
 
+# The only `with:` inputs the ci-workflows guard provenance check lets a caller pass
+# (scripts/sdlc_flow.py GUARD_INPUTS). `runs-on` is required and must be GitHub-hosted:
+# the reusable workflows default it to the self-hosted k2-arc-linux.
+SDLC_CALLER_INPUTS = {"runs-on", "hotfix-label"}
+
+
 def _is_exempt_sdlc_caller(job):
-    return (
+    if not (
         isinstance(job, dict)
         and isinstance(job.get("uses"), str)
         and SDLC_CALLER_RE.fullmatch(job["uses"]) is not None
         and "steps" not in job
         and "runs-on" not in job
+    ):
+        return False
+    inputs = job.get("with")
+    return (
+        isinstance(inputs, dict)
+        and set(inputs) <= SDLC_CALLER_INPUTS
+        and inputs.get("runs-on") == "ubuntu-latest"
     )
 
 
@@ -309,7 +322,10 @@ def test_sdlc_callers_are_the_exempt_pure_callers(name):
     assert len(jobs) == 1 and all(_is_exempt_sdlc_caller(j) for j in jobs.values())
 
 
-_SDLC_OK = "jobs:\n  sdlc:\n    uses: K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-{w}.yml@v1\n"
+_SDLC_OK = (
+    "jobs:\n  sdlc:\n    uses: K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-{w}.yml@v1\n"
+    "    with:\n      runs-on: ubuntu-latest\n"
+)
 
 
 @pytest.mark.parametrize("w", ["guard", "promote", "sync-guard"])
@@ -333,7 +349,7 @@ def test_sdlc_exemption_accepts_the_exact_template_callers(w):
     ],
 )
 def test_sdlc_exemption_rejects_any_other_reusable_workflow(ref):
-    text = f"on: push\njobs:\n  j:\n    uses: {ref}\n"
+    text = f"on: push\njobs:\n  j:\n    uses: {ref}\n    with:\n      runs-on: ubuntu-latest\n"
     assert _pin_errors("x.yml", text)
     assert _runner_errors("x.yml", _load_workflow_text(text))
 
@@ -342,6 +358,7 @@ def test_sdlc_exemption_rejects_the_same_path_with_an_extra_step():
     text = (
         "on: push\njobs:\n  sdlc:\n"
         "    uses: K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-guard.yml@v1\n"
+        "    with:\n      runs-on: ubuntu-latest\n"
         "    steps:\n      - run: echo hi\n"
     )
     assert _pin_errors("x.yml", text)
@@ -711,3 +728,32 @@ def test_release_mcp_registry_job_calls_the_publisher_after_the_release():
     assert job["secrets"] == {"MCP_REGISTRY_PRIVATE_KEY": "${{ secrets.MCP_REGISTRY_PRIVATE_KEY }}"}
     for name, other in wf["jobs"].items():
         assert other.get("secrets") != "inherit", name
+
+
+def test_sdlc_exemption_accepts_the_hotfix_label_input():
+    text = "on: push\n" + _SDLC_OK.format(w="guard") + "      hotfix-label: break-glass\n"
+    assert _pin_errors("x.yml", text) == []
+    assert _runner_errors("x.yml", _load_workflow_text(text)) == []
+
+
+@pytest.mark.parametrize(
+    "with_block",
+    [
+        "    with:\n      runs-on: self-hosted\n",
+        "    with:\n      runs-on: k2-arc-linux\n",
+        "    with:\n      runs-on: [ubuntu-latest]\n",
+        "    with:\n      hotfix-label: break-glass\n",
+        "    with:\n      runs-on: ubuntu-latest\n      dry-run: true\n",
+        "    with: {}\n",
+        "",
+    ],
+    ids=["self-hosted", "k2-arc-linux", "list", "no-runs-on", "extra-key", "empty-with", "missing-with"],
+)
+def test_sdlc_exemption_requires_a_github_hosted_runs_on_and_only_allowed_inputs(with_block):
+    text = (
+        "on: push\njobs:\n  sdlc:\n"
+        "    uses: K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-guard.yml@v1\n" + with_block
+    )
+    assert not _is_exempt_sdlc_caller(_load_workflow_text(text)["jobs"]["sdlc"])
+    assert _pin_errors("x.yml", text)
+    assert _runner_errors("x.yml", _load_workflow_text(text))
