@@ -223,31 +223,151 @@ def _workflow(name):
 
 USES_RE = re.compile(r"^\s*-?\s*uses:\s*(\S+)(.*)$")
 
+# NARROW EXEMPTION. The SDLC guard/promote callers must be byte-identical copies
+# of the ci-workflows v1 templates: the guard's provenance check (the nightly
+# sdlc-sync-guard audit) distrusts any guard check posted by a run of a changed
+# copy, and the templates call the reusable workflow by the moving `@v1` tag with
+# no `runs-on`. So a job is exempt from the SHA-pin and hosted-runner checks only
+# when it is a pure reusable-workflow caller (no `steps`, no `runs-on`) whose
+# `uses:` is exactly one of these refs. Anything else is still enforced.
+SDLC_CALLER_RE = re.compile(
+    r"K2-Rocket-Apps/ci-workflows/\.github/workflows/sdlc-(?:guard|promote|sync-guard)\.yml@v1"
+)
 
-@pytest.mark.parametrize("name", sorted(p.name for p in WORKFLOWS.glob("*.yml")))
-def test_every_action_is_pinned_to_a_full_sha_with_version_comment(name):
-    for line in (WORKFLOWS / name).read_text(encoding="utf-8").splitlines():
+
+def _is_exempt_sdlc_caller(job):
+    return (
+        isinstance(job, dict)
+        and isinstance(job.get("uses"), str)
+        and SDLC_CALLER_RE.fullmatch(job["uses"]) is not None
+        and "steps" not in job
+        and "runs-on" not in job
+    )
+
+
+def _load_workflow_text(text):
+    data = yaml.safe_load(text)
+    data["on"] = data.pop(True, data.get("on"))
+    return data
+
+
+def _pin_errors(name, text):
+    exempt_refs = {
+        job["uses"] for job in _load_workflow_text(text)["jobs"].values() if _is_exempt_sdlc_caller(job)
+    }
+    errors = []
+    for line in text.splitlines():
         match = USES_RE.match(line)
         if not match:
             continue
         ref, rest = match.groups()
         if ref.startswith("./"):
             continue
-        assert re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", ref), f"{name}: {ref} not pinned to a full SHA"
-        assert re.match(r"\s*#\s*v\d", rest), f"{name}: {ref} has no version comment"
+        # Only a job-level `uses:` (not a `- uses:` step) of an exempt caller job.
+        if ref in exempt_refs and not line.lstrip().startswith("-"):
+            continue
+        if not re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", ref):
+            errors.append(f"{name}: {ref} not pinned to a full SHA")
+        elif not re.match(r"\s*#\s*v\d", rest):
+            errors.append(f"{name}: {ref} has no version comment")
+    return errors
+
+
+def _runner_errors(name, data, root=REPO_ROOT):
+    errors = []
+    for job_name, job in data["jobs"].items():
+        if _is_exempt_sdlc_caller(job):
+            continue
+        if "uses" in job:
+            # A job that calls a reusable workflow has no runner of its own; the
+            # called workflow is itself one of the files checked here.
+            if not (
+                job["uses"].startswith("./.github/workflows/")
+                and (root / job["uses"]).is_file()
+                and "runs-on" not in job
+            ):
+                errors.append(f"{name}:{job_name}")
+            continue
+        if job.get("runs-on") != "ubuntu-latest":
+            errors.append(f"{name}:{job_name}")
+    return errors
+
+
+@pytest.mark.parametrize("name", sorted(p.name for p in WORKFLOWS.glob("*.yml")))
+def test_every_action_is_pinned_to_a_full_sha_with_version_comment(name):
+    assert _pin_errors(name, (WORKFLOWS / name).read_text(encoding="utf-8")) == []
 
 
 @pytest.mark.parametrize("name", sorted(p.name for p in WORKFLOWS.glob("*.yml")))
 def test_every_job_uses_a_github_hosted_runner(name):
-    for job_name, job in _workflow(name)["jobs"].items():
-        if "uses" in job:
-            # A job that calls a reusable workflow has no runner of its own; the
-            # called workflow is itself one of the files checked here.
-            assert job["uses"].startswith("./.github/workflows/"), f"{name}:{job_name}"
-            assert (REPO_ROOT / job["uses"]).is_file(), f"{name}:{job_name}"
-            assert "runs-on" not in job, f"{name}:{job_name}"
-            continue
-        assert job["runs-on"] == "ubuntu-latest", f"{name}:{job_name}"
+    assert _runner_errors(name, _workflow(name)) == []
+
+
+@pytest.mark.parametrize("name", ["sdlc-guard.yml", "sdlc-promote.yml"])
+def test_sdlc_callers_are_the_exempt_pure_callers(name):
+    jobs = _workflow(name)["jobs"]
+    assert len(jobs) == 1 and all(_is_exempt_sdlc_caller(j) for j in jobs.values())
+
+
+_SDLC_OK = "jobs:\n  sdlc:\n    uses: K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-{w}.yml@v1\n"
+
+
+@pytest.mark.parametrize("w", ["guard", "promote", "sync-guard"])
+def test_sdlc_exemption_accepts_the_exact_template_callers(w):
+    text = "on: push\n" + _SDLC_OK.format(w=w)
+    assert _pin_errors("x.yml", text) == []
+    assert _runner_errors("x.yml", _load_workflow_text(text)) == []
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "K2-Rocket-Apps/ci-workflows/.github/workflows/build.yml@v1",
+        "K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-other.yml@v1",
+        "K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-guard.yml@v2",
+        "K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-guard.yml@main",
+        "K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-guard.yml@v1.2",
+        "K2-Rocket-Apps/ci-workflows/.github/workflows/sub/sdlc-guard.yml@v1",
+        "Other-Org/ci-workflows/.github/workflows/sdlc-guard.yml@v1",
+        "K2-Rocket-Apps/ci-workflow/.github/workflows/sdlc-guard.yml@v1",
+    ],
+)
+def test_sdlc_exemption_rejects_any_other_reusable_workflow(ref):
+    text = f"on: push\njobs:\n  j:\n    uses: {ref}\n"
+    assert _pin_errors("x.yml", text)
+    assert _runner_errors("x.yml", _load_workflow_text(text))
+
+
+def test_sdlc_exemption_rejects_the_same_path_with_an_extra_step():
+    text = (
+        "on: push\njobs:\n  sdlc:\n"
+        "    uses: K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-guard.yml@v1\n"
+        "    steps:\n      - run: echo hi\n"
+    )
+    assert _pin_errors("x.yml", text)
+    assert _runner_errors("x.yml", _load_workflow_text(text))
+
+
+def test_sdlc_exemption_rejects_the_same_path_as_a_step_or_with_a_runner():
+    as_step = (
+        "on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - uses: K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-guard.yml@v1\n"
+    )
+    assert _pin_errors("x.yml", as_step)
+    with_runner = (
+        "on: push\njobs:\n  j:\n    runs-on: self-hosted\n"
+        "    uses: K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-guard.yml@v1\n"
+    )
+    assert _pin_errors("x.yml", with_runner)
+    assert _runner_errors("x.yml", _load_workflow_text(with_runner))
+
+
+def test_sdlc_exemption_does_not_cover_other_unpinned_steps_in_the_same_file():
+    text = (
+        "on: push\n" + _SDLC_OK.format(w="guard")
+        + "  other:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n"
+    )
+    assert _pin_errors("x.yml", text) == ["x.yml: actions/checkout@v4 not pinned to a full SHA"]
 
 
 def test_release_triggers_on_v_tags_or_a_tag_dispatch_only():
