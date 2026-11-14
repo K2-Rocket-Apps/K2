@@ -1,0 +1,20 @@
+name: sdlc-promote
+
+# Keeps "Promote develop → qa", "Promote qa → main (production release)" and
+# "Back-merge main → develop" PRs open and current. Never merges.
+on:
+  push:
+    branches: [develop, qa, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    uses: K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-promote.yml@v1
+    # Explicit, never `secrets: inherit`. PRs opened with GITHUB_TOKEN do not
+    # trigger CI, so the PRs are opened with the release GitHub App.
+    secrets:
+      RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
