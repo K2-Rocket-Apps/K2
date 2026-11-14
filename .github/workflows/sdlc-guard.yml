@@ -1,0 +1,57 @@
+name: sdlc-guard
+
+# Required checks "sdlc / guard-qa", "sdlc / guard-main" (and optional
+# "sdlc / guard-develop"), posted by the reusable workflow only for the target
+# a PR is into. The check names are fixed; the job id only names the helper
+# jobs ("sdlc / judge-<t>").
+# Must be on the DEFAULT branch: pull_request_target runs the default branch's
+# copy, so a PR cannot edit its own guard. Keep it byte-for-byte apart from
+# comments, the cron schedule and `with:` (hotfix-label, runs-on): the nightly
+# audit (sdlc-sync-guard) reports any other change on develop/qa/main and
+# distrusts guard checks posted by a run of a changed copy.
+on:
+  pull_request_target:
+    # `edited` fires when a PR's base branch is changed (retargeting);
+    # labeled/unlabeled re-judge the optional hotfix break-glass label;
+    # closed withdraws a pass so reopening cannot merge on an old verdict;
+    # auto_merge_enabled/disabled re-judge a back-merge (it passes only when a merge
+    # commit is guaranteed, e.g. auto-merge set to "Create a merge commit").
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled, closed, auto_merge_enabled, auto_merge_disabled]
+    # No `branches:` filter: it matches the NEW base, so retargeting a qa/main PR to
+    # another branch would never run, and its old pass would not be withdrawn. PRs
+    # into other branches post nothing (they have no PR into develop/qa/main).
+  push:
+    # Branch moved: re-judge the pushed commit and every open PR head.
+    branches: [develop, qa, main]
+  schedule:
+    # Re-check of every open PR head every 6 hours (a lost push event or a crashed refresh
+    # cannot leave a stale pass standing for long); re-posts only a verdict that changed.
+    # Any minute works.
+    - cron: '41 */6 * * *'
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: write  # GITHUB_TOKEN fallback, and withdrawing old Actions passes once the guard App posts
+
+jobs:
+  sdlc:
+    # Skip title/body-only edits (sdlc-promote rewrites the promotion PR body on every push);
+    # a skipped caller posts no guard check, so this cannot leave a pass behind.
+    if: github.event.action != 'edited' || github.event.changes.base != null
+    # Job-level (not workflow-level) so a skipped title edit never enters the queue and
+    # replaces a pending real event. Serialised per PR: runs never overlap, and a newer
+    # queued event replaces an older pending one, so the newest event is judged last.
+    # Every run also re-judges if develop/qa/main moved while it ran.
+    concurrency:
+      group: sdlc-guard-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: false
+    uses: K2-Rocket-Apps/ci-workflows/.github/workflows/sdlc-guard.yml@v1
+    # No `secrets:` (and never `secrets: inherit`). The sdlc guard GitHub App posts the checks
+    # (the rulesets pin its integration_id, variable SDLC_GUARD_APP_INTEGRATION_ID); its key is
+    # read by the reusable workflow's own jobs from this repo's `sdlc-guard` environment, whose
+    # deployment branches are develop/qa/main only. Until that environment holds the secrets the
+    # checks are posted with GITHUB_TOKEN: weaker (any workflow with checks: write can post
+    # them). ci-workflows docs/apps/README.md.
+    # with:
+    #   hotfix-label: break-glass   # optional: hotfix/* PRs need this label
